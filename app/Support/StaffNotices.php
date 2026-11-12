@@ -42,16 +42,27 @@ class StaffNotices
         self::send(self::users([$officer->id], except: $by), $m, 'routed', 'Routed to you', self::what($m).' was routed to you by '.$by->name.'. Acknowledge it to start the 20-day clock.');
     }
 
-    /** The Chief approved it for signing: the officer who evaluated it hears how it went. */
-    public static function reviewed(HrMechanism $m, User $by): void
+    /** The Chief did not approve it: the officer who evaluated it is told what to look at again. */
+    public static function returnedToOfficer(HrMechanism $m, User $by, string $remarks): void
     {
-        self::send(self::users([$m->action_officer_id], except: $by), $m, 'reviewed', 'Approved by the Chief', self::what($m).' was approved by '.$by->name.'. The agency is printing and signing three copies.');
+        self::send(self::users([$m->action_officer_id], except: $by), $m, 'returned_to_officer', 'Returned for re-evaluation', self::what($m).' was returned by '.$by->name.': '.str($remarks)->limit(120));
     }
 
-    /** Sent back for compliance: the officer who evaluated it is told what is missing. */
-    public static function returned(HrMechanism $m, User $by, string $remarks): void
+    /**
+     * The Chief decided: the officer prints the transmittal, has the Regional Director sign it, then sends it to the agency.
+     * Nothing has gone to the agency yet.
+     */
+    public static function readyToTransmit(HrMechanism $m, User $by, bool $forCompliance): void
     {
-        self::send(self::users([$m->action_officer_id], except: $by), $m, 'returned', 'Sent back for compliance', self::what($m).' was sent back by '.$by->name.': '.str($remarks)->limit(120));
+        $what = $forCompliance ? 'marked For Compliance by '.$by->name.': '.str((string) $m->remarks)->limit(120) : 'approved by '.$by->name;
+
+        self::send(
+            self::users([$m->action_officer_id], except: $by),
+            $m,
+            $forCompliance ? 'marked_for_compliance' : 'reviewed',
+            $forCompliance ? 'For Compliance: print the transmittal' : 'Reviewed: print the transmittal',
+            self::what($m).' was '.$what.'. Print the transmittal for the Regional Director\'s signature, then record it in the system to email the agency.',
+        );
     }
 
     /** Final approval: the officer and the Chief hear it is done. */

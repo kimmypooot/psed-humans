@@ -8,9 +8,12 @@ use App\Models\AuditLog;
 use App\Models\HrMechanism;
 use App\Models\HrMechanismAttachment;
 use App\Models\User;
+use App\Support\PdfSignature;
 use App\Support\Transmittal;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -39,7 +42,7 @@ class MechanismWorkflowController extends Controller
         return back()->with('status', 'Routed to '.$officer->name.($officer->is($request->user()) ? ' (you)' : '').'.');
     }
 
-    /** The Action Officer acknowledges receipt: the 20-day clock starts. */
+    /** The Action Officer acknowledges receipt: the 20-day clock has been running since it was routed. */
     public function acknowledge(Request $request, HrMechanism $mechanism): RedirectResponse
     {
         $this->authorize('acknowledge', $mechanism);
@@ -47,7 +50,7 @@ class MechanismWorkflowController extends Controller
         $this->process->acknowledge($mechanism, $request->user());
         AuditLog::record('mechanism.acknowledged', $mechanism);
 
-        return back()->with('status', 'Receipt acknowledged. The '.config('hrmm.turnaround_days').'-working-day turnaround started; the target date is '.$mechanism->due_at->format('M j, Y').'.');
+        return back()->with('status', 'Receipt acknowledged. The target date of the '.config('hrmm.turnaround_days').'-working-day turnaround, counted from routing, is '.$mechanism->due_at->format('M j, Y').'.');
     }
 
     /** The Action Officer forwards the evaluated mechanism, with the reviewed HR mechanism and the HR checklist, to the PSED Chief. */
@@ -74,23 +77,71 @@ class MechanismWorkflowController extends Controller
 
         $data = $request->validate(['remarks' => ['required', 'string', 'min:5', 'max:2000'], 'transmittal' => ['required', 'array']] + Transmittal::rules('transmittal.'));
         $letter = $this->letter($data['transmittal']);
-        $this->guard(fn () => $this->process->returnForCompliance($mechanism, $request->user(), $data['remarks'], $letter));
+        [$signed, $signature] = $this->signedChecklist($request);
+        $this->guard(fn () => $this->process->returnForCompliance($mechanism, $request->user(), $data['remarks'], $letter, $signed, $signature));
         AuditLog::record('mechanism.returned', $mechanism, after: ['remarks' => $data['remarks']]);
 
-        return back()->with('status', 'Marked For Compliance. The transmittal, the reviewed HR mechanism and the checklist were emailed to the agency.');
+        return back()->with('status', 'Marked For Compliance. The Action Officer will print the transmittal for the Regional Director\'s signature and send it to the agency.');
     }
 
-    /** The Chief's decision when it is for approval: the For Approval transmittal is made, and the agency is emailed it with the two documents. */
+    /** Not approved: the Chief sends it back to the Action Officer to evaluate again. */
+    public function returnToOfficer(Request $request, HrMechanism $mechanism): RedirectResponse
+    {
+        $this->authorize('returnToOfficer', $mechanism);
+
+        $data = $request->validate(['remarks' => ['required', 'string', 'min:5', 'max:2000']], ['remarks.required' => 'Say what the Action Officer should look at again.']);
+        $this->process->returnToOfficer($mechanism, $request->user(), $data['remarks']);
+        AuditLog::record('mechanism.returned_to_officer', $mechanism, after: ['remarks' => $data['remarks']]);
+
+        return back()->with('status', 'Returned to the Action Officer for re-evaluation.');
+    }
+
+    /**
+     * The Regional Director signed the printed transmittal: the Action Officer uploads the signed copy and the agency is
+     * emailed it with the reviewed HR mechanism and the HR checklist. The status becomes Transmittal (Approved) or
+     * Transmittal (For Compliance), by what the Chief decided.
+     */
+    public function transmit(Request $request, HrMechanism $mechanism): RedirectResponse
+    {
+        $this->authorize('transmit', $mechanism);
+
+        $data = $request->validate([
+            'signed_transmittal' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png,doc,docx', 'max:20480'],
+            'note' => ['nullable', 'string', 'max:2000'],
+        ], [
+            'signed_transmittal.required' => 'Upload the transmittal signed by the Regional Director.',
+            'signed_transmittal.mimes' => 'The signed transmittal must be a PDF, an image or a Word file.',
+        ]);
+        $this->guard(fn () => $this->process->transmit($mechanism, $request->user(), $request->file('signed_transmittal'), $data['note'] ?? null));
+        AuditLog::record('mechanism.transmitted', $mechanism, after: ['status' => $mechanism->status->value]);
+
+        return back()->with('status', 'Recorded as '.$mechanism->status->value.'. The agency was emailed the signed transmittal, the reviewed HR mechanism and the HR checklist.');
+    }
+
+    /** The Action Officer sent the approved copies to the Field Office and the agency. */
+    public function distribute(Request $request, HrMechanism $mechanism): RedirectResponse
+    {
+        $this->authorize('distribute', $mechanism);
+
+        $data = $request->validate(['note' => ['nullable', 'string', 'max:2000']]);
+        $this->process->distribute($mechanism, $request->user(), $data['note'] ?? null);
+        AuditLog::record('mechanism.distributed', $mechanism);
+
+        return back()->with('status', 'Recorded: one copy to the Field Office, one to the agency, and one kept in the records of PSED.');
+    }
+
+    /** The Chief's decision when it is for approval: the For Approval transmittal is made and the Action Officer prints it. The agency is not emailed yet. */
     public function chiefApprove(Request $request, HrMechanism $mechanism): RedirectResponse
     {
         $this->authorize('review', $mechanism);
 
         $data = $request->validate(['note' => ['nullable', 'string', 'max:2000'], 'transmittal' => ['required', 'array']] + Transmittal::rules('transmittal.'));
         $letter = $this->letter($data['transmittal']);
-        $this->guard(fn () => $this->process->chiefApprove($mechanism, $request->user(), $data['note'] ?? null, $letter));
+        [$signed, $signature] = $this->signedChecklist($request);
+        $this->guard(fn () => $this->process->chiefApprove($mechanism, $request->user(), $data['note'] ?? null, $letter, $signed, $signature));
         AuditLog::record('mechanism.reviewed', $mechanism);
 
-        return back()->with('status', 'Approved. The agency was emailed the transmittal, the reviewed HR mechanism and the HR checklist.');
+        return back()->with('status', 'Reviewed. The Action Officer will print the transmittal for the Regional Director\'s signature and send it to the agency.');
     }
 
     /** The signed copies are in: the Director IV (or PSED for them) gives the final approval. */
@@ -109,6 +160,52 @@ class MechanismWorkflowController extends Controller
     private function documentRules(): array
     {
         return array_fill_keys(HrMechanismAttachment::UPLOADED, self::FILE_RULES);
+    }
+
+    /**
+     * The HR checklist the Chief signed with their DICT PNPKI certificate, checked: a PDF carrying a digital signature that
+     * is still valid (the file was not changed after signing), issued by DICT's PNPKI, by the Chief themselves.
+     *
+     * @return array{0: UploadedFile, 1: array<string, mixed>}
+     *
+     * @throws ValidationException
+     */
+    private function signedChecklist(Request $request): array
+    {
+        $request->validate(['signed_checklist' => ['required', 'file', 'mimes:pdf', 'max:20480']], [
+            'signed_checklist.required' => 'Upload the HR checklist signed with your DICT PNPKI certificate.',
+            'signed_checklist.mimes' => 'The signed HR checklist must be a PDF.',
+        ]);
+
+        $file = $request->file('signed_checklist');
+        $signature = PdfSignature::inspect($file->getRealPath(), config('hrmm.pnpki_ca_bundle'));
+        $user = $request->user();
+        $fail = fn (string $message) => throw ValidationException::withMessages(['signed_checklist' => $message]);
+
+        $signer = (string) $signature['signer'];
+        $issuer = (string) $signature['issuer'];
+
+        match (true) {
+            ! $signature['signed'] => $fail('This PDF has no digital signature. Sign the HR checklist with your DICT PNPKI certificate, then upload the signed PDF.'),
+            ! $signature['intact'] => $fail('The signature is not valid: the PDF was changed after it was signed, or the signature is damaged. Sign the HR checklist again.'),
+            $signature['trusted'] === false => $fail('The certificate that signed this PDF is not trusted by the PNPKI certificate authorities.'),
+            $signer === '' => $fail('The signing certificate could not be read from the PDF.'),
+            preg_match((string) config('hrmm.pnpki_issuer'), $issuer) !== 1 => $fail("This PDF was signed with a certificate issued by \"{$issuer}\", not by DICT PNPKI. Sign the HR checklist with your DICT PNPKI certificate."),
+            ! $this->isSigner($signer, $user->name) => $fail("This PDF was signed by \"{$signer}\". The HR checklist must be signed by you, {$user->name}, the PSED Chief."),
+            default => null,
+        };
+
+        return [$file, $signature];
+    }
+
+    /** Whether the certificate's name is this person: every word of their name appears in it, ignoring case and accents. */
+    private function isSigner(string $certificateName, string $userName): bool
+    {
+        $plain = fn (string $s) => mb_strtolower(Str::ascii($s));
+        $name = $plain($certificateName);
+        $words = array_filter(preg_split('/[^a-z0-9]+/', $plain($userName)) ?: [], fn ($w) => strlen($w) >= 2);
+
+        return $words !== [] && collect($words)->every(fn ($w) => str_contains($name, $w));
     }
 
     /**

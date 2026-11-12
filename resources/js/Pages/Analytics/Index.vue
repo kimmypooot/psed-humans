@@ -63,7 +63,7 @@ const insight = computed(() => {
         </PageHeader>
 
         <!-- Scope and filters, on a soft brand band. -->
-        <div class="mb-6 overflow-hidden rounded-xl border border-border bg-gradient-to-br from-csc-blue via-csc-blue to-csc-blue-light text-white">
+        <div class="relative z-20 mb-6 rounded-xl border border-border bg-gradient-to-br from-csc-blue via-csc-blue to-csc-blue-light text-white">
             <div class="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 p-5 sm:p-6">
                 <div class="min-w-0 max-w-2xl">
                     <p class="text-xs font-semibold tracking-widest text-white/70 uppercase">{{ scope }}</p>

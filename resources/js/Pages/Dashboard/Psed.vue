@@ -27,7 +27,7 @@ const viewing = ref(null);
 const role = computed(() => usePage().props.auth.user.role);
 const intro = computed(() =>
     role.value === 'director'
-        ? 'Mechanisms waiting for your final approval are in the Reviewed by PSED Chief column.'
+        ? 'Mechanisms waiting for your final approval are in the Transmittal (Approved) column.'
         : 'Route what came in, acknowledge and evaluate what is routed to you, and review what is forwarded to the Chief.',
 );
 
@@ -36,9 +36,11 @@ const statusIcon = {
     'Received by PSED': 'archive',
     'Routed to Action Officer': 'arrowRight',
     'Processing/Evaluating': 'activity',
-    'For PSED Chief Review': 'shield',
-    'Reviewed by PSED Chief': 'documentText',
-    'For Compliance': 'exclamation',
+    'Reviewed by PSED Chief': 'shield',
+    Reviewed: 'documentText',
+    'For Compliance': 'printer',
+    'Transmittal (Approved)': 'documentText',
+    'Transmittal (For Compliance)': 'exclamation',
     Approved: 'checkCircle',
 };
 // The column holds only the newest cards; this is how many there really are.
@@ -51,6 +53,7 @@ const strip = computed(() =>
         { key: 'processing', label: 'Processing', icon: 'clock', tone: 'info' },
         { key: 'overdue', label: 'Overdue', icon: 'exclamation', tone: 'danger' },
         { key: 'to_review', label: 'For Chief review', icon: 'shield', tone: 'info' },
+        { key: 'to_transmit', label: 'To transmit', icon: 'printer', tone: 'warning' },
     ].filter((s) => props.mine[s.key] > 0 || ['to_acknowledge', 'processing'].includes(s.key)),
 );
 </script>

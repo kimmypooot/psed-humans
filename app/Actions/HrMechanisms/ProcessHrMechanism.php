@@ -21,12 +21,12 @@ use RuntimeException;
 use Throwable;
 
 /**
- * What PSED does with a submission, in order:
- *  route (PSED staff) -> acknowledge (Action Officer, the 20-day clock starts) -> attach the three
- *  documents and forward (Action Officer) -> review (PSED Chief: approve, which emails the agency with
- *  the documents) -> final approval once the signed copies are in.
- * At any point of processing or Chief review it can instead be sent back For Compliance, with the
- * same three documents emailed to the agency.
+ * What PSED does with a submission, in the order the PSED Chief approved:
+ *  route (PSED staff; the 20-day clock starts) -> acknowledge (Action Officer) -> attach the reviewed
+ *  mechanism and the checklist and forward (Action Officer) -> review (PSED Chief: approve, mark For
+ *  Compliance, or send back to the officer) -> transmit (Action Officer, once the Regional Director signed
+ *  the printed transmittal; this is when the agency is emailed) -> final approval once the Head of
+ *  Agency's signed copies are in -> distribute the approved copies.
  */
 class ProcessHrMechanism
 {
@@ -38,18 +38,21 @@ class ProcessHrMechanism
         DB::transaction(function () use ($mechanism, $by, $officer, $note, $from) {
             $record = ActionOfficer::forUser($officer);
             $initials = mb_substr($record->initials, 0, 20);
+            $now = now();
 
             $mechanism->update([
                 'action_officer_id' => $officer->id,
                 'processor' => $initials,
                 'status' => MechanismStatus::Routed,
-                'routed_at' => now(),
+                'routed_at' => $now,
                 'acknowledged_at' => null,
-                'due_at' => null,
+                // The 20-day clock starts at routing. Routing to another officer does not give the division more time.
+                'due_at' => $mechanism->due_at ?? Turnaround::dueFrom($now),
+                'date_processed' => $mechanism->date_processed ?? $now,
             ]);
             $mechanism->officers()->sync([$record->id => ['position' => 1]]);
 
-            $mechanism->recordEvent('routed', $by, $from, MechanismStatus::Routed, trim('To '.$officer->name.($note ? '. '.$note : '')));
+            $mechanism->recordEvent('routed', $by, $from, MechanismStatus::Routed, trim('To '.$officer->name.'. Turnaround: '.Turnaround::days().' working days, until '.$mechanism->due_at->format('M j, Y').'.'.($note ? ' '.$note : '')));
         });
 
         StaffNotices::routed($mechanism, $by, $officer);
@@ -57,7 +60,7 @@ class ProcessHrMechanism
         return $mechanism;
     }
 
-    /** The Action Officer acknowledges receipt: the 20-day turnaround starts and it is being processed. */
+    /** The Action Officer acknowledges receipt and starts processing. The 20-day clock already started when it was routed. */
     public function acknowledge(HrMechanism $mechanism, User $by): HrMechanism
     {
         $now = now();
@@ -67,11 +70,9 @@ class ProcessHrMechanism
             $mechanism->update([
                 'status' => MechanismStatus::Processing,
                 'acknowledged_at' => $now,
-                'date_processed' => $now,
-                'due_at' => Turnaround::dueFrom($now),
             ]);
 
-            $mechanism->recordEvent('acknowledged', $by, $from, MechanismStatus::Processing, 'Turnaround: '.Turnaround::days().' working days, until '.$mechanism->due_at->format('M j, Y').'.');
+            $mechanism->recordEvent('acknowledged', $by, $from, MechanismStatus::Processing, 'Target date: '.$mechanism->due_at?->format('M j, Y').'.');
         });
 
         return $mechanism;
@@ -113,8 +114,8 @@ class ProcessHrMechanism
 
         DB::transaction(function () use ($mechanism, $by, $note) {
             $from = $mechanism->status;
-            $mechanism->update(['status' => MechanismStatus::ForChiefReview, 'date_evaluated' => now()]);
-            $mechanism->recordEvent('forwarded', $by, $from, MechanismStatus::ForChiefReview, $note);
+            $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'date_evaluated' => now()]);
+            $mechanism->recordEvent('forwarded', $by, $from, MechanismStatus::ReviewedByChief, $note);
         });
 
         $this->notifyChief($mechanism, $by);
@@ -140,74 +141,132 @@ class ProcessHrMechanism
     }
 
     /**
-     * Not compliant: back to the agency with the reviewed mechanism and checklist, and a transmittal made now
-     * (the For Compliance letter), by email.
-     *
-     * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
-     *
-     * @throws RuntimeException when a document is missing
+     * Not approved: the Chief sends it back to the Action Officer to evaluate again. The 20-day clock keeps running; the
+     * officer forwards it to the Chief again when done.
      */
-    public function returnForCompliance(HrMechanism $mechanism, User $by, string $remarks, array $transmittal): HrMechanism
+    public function returnToOfficer(HrMechanism $mechanism, User $by, string $remarks): HrMechanism
     {
-        $this->requireDocuments($mechanism);
-
-        $mechanism = DB::transaction(function () use ($mechanism, $by, $remarks, $transmittal) {
-            $this->writeTransmittal($mechanism, $by, 'compliance', $transmittal);
+        DB::transaction(function () use ($mechanism, $by, $remarks) {
             $from = $mechanism->status;
-            $mechanism->update([
-                'status' => MechanismStatus::ForCompliance,
-                'date_processed' => $mechanism->date_processed ?? now(),
-                'date_reviewed' => $by->isChief() ? now() : $mechanism->date_reviewed,
-                'date_returned' => now(),
-                'remarks' => $remarks,
-            ]);
-            $mechanism->recordEvent('returned', $by, $from, MechanismStatus::ForCompliance, $remarks);
-
-            return $mechanism;
+            $mechanism->update(['status' => MechanismStatus::Processing, 'date_evaluated' => null]);
+            $mechanism->recordEvent('returned_to_officer', $by, $from, MechanismStatus::Processing, $remarks);
         });
 
-        $this->tell(
-            $mechanism,
-            'For compliance',
-            'Your HR mechanism needs corrections before PSED can approve it.',
-            [$remarks, 'The transmittal, the reviewed HR mechanism and the HR checklist are attached. Correct the HR mechanism and upload it again from your tracking page.'],
-            true,
-        );
-        StaffNotices::returned($mechanism, $by, $remarks);
+        StaffNotices::returnedToOfficer($mechanism, $by, $remarks);
 
         return $mechanism;
     }
 
     /**
-     * The PSED Chief approves: the For Approval transmittal is made now, and the agency is emailed it with the
-     * reviewed HR mechanism and the HR checklist, and told to print three copies for signing.
+     * The Chief marks it For Compliance: the corrections are noted, the HR checklist they signed replaces the officer's, and
+     * the For Compliance transmittal is made. Nothing goes to the agency yet: the Action Officer prints the transmittal for
+     * the Regional Director's signature, then transmits it.
      *
      * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
+     * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
+     *
+     * @throws RuntimeException when a document is missing
      */
-    public function chiefApprove(HrMechanism $mechanism, User $by, ?string $note, array $transmittal): HrMechanism
+    public function returnForCompliance(HrMechanism $mechanism, User $by, string $remarks, array $transmittal, UploadedFile $signedChecklist, array $signature): HrMechanism
     {
         $this->requireDocuments($mechanism);
 
-        $mechanism = DB::transaction(function () use ($mechanism, $by, $note, $transmittal) {
-            $this->writeTransmittal($mechanism, $by, 'approval', $transmittal);
+        $mechanism = DB::transaction(function () use ($mechanism, $by, $remarks, $transmittal, $signedChecklist, $signature) {
+            $this->replaceChecklist($mechanism, $by, $signedChecklist, $signature);
+            $this->writeTransmittal($mechanism, $by, 'compliance', $transmittal);
             $from = $mechanism->status;
-            $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'date_reviewed' => now(), 'remarks' => $note]);
-            $mechanism->recordEvent('reviewed', $by, $from, MechanismStatus::ReviewedByChief, $note);
+            $mechanism->update([
+                'status' => MechanismStatus::ForCompliance,
+                'date_processed' => $mechanism->date_processed ?? now(),
+                'date_reviewed' => now(),
+                'remarks' => $remarks,
+            ]);
+            $mechanism->recordEvent('marked_for_compliance', $by, $from, MechanismStatus::ForCompliance, $remarks);
 
             return $mechanism;
         });
 
-        $this->tell(
-            $mechanism,
-            'Approved by the PSED Chief',
-            'Your HR mechanism was reviewed and approved by the PSED Chief.',
-            [
-                'Print three (3) copies of the HR Mechanism for the signature of the Head of Agency, then submit the signed copies to the CSC Regional Office VIII for final approval.',
-                'The reviewed HR mechanism, the transmittal and the HR checklist are attached.',
-            ],
-            true,
-        );
-        StaffNotices::reviewed($mechanism, $by);
+        StaffNotices::readyToTransmit($mechanism, $by, forCompliance: true);
+
+        return $mechanism;
+    }
+
+    /**
+     * The PSED Chief approves: the HR checklist they signed replaces the officer's and the For Approval transmittal is made.
+     * The status is Reviewed. The agency is not emailed yet: the Action Officer prints the transmittal for the Regional
+     * Director's signature, then transmits it.
+     *
+     * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
+     * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
+     */
+    public function chiefApprove(HrMechanism $mechanism, User $by, ?string $note, array $transmittal, UploadedFile $signedChecklist, array $signature): HrMechanism
+    {
+        $this->requireDocuments($mechanism);
+
+        $mechanism = DB::transaction(function () use ($mechanism, $by, $note, $transmittal, $signedChecklist, $signature) {
+            $this->replaceChecklist($mechanism, $by, $signedChecklist, $signature);
+            $this->writeTransmittal($mechanism, $by, 'approval', $transmittal);
+            $from = $mechanism->status;
+            $mechanism->update(['status' => MechanismStatus::Reviewed, 'date_reviewed' => now(), 'remarks' => $note]);
+            $mechanism->recordEvent('reviewed', $by, $from, MechanismStatus::Reviewed, $note);
+
+            return $mechanism;
+        });
+
+        StaffNotices::readyToTransmit($mechanism, $by, forCompliance: false);
+
+        return $mechanism;
+    }
+
+    /**
+     * The Regional Director signed the printed transmittal. The Action Officer records it with the signed copy: the status
+     * becomes Transmittal (Approved) or Transmittal (For Compliance), and the agency is emailed the reviewed HR mechanism,
+     * the signed transmittal and the HR checklist.
+     *
+     * @throws RuntimeException when a document is missing
+     */
+    public function transmit(HrMechanism $mechanism, User $by, UploadedFile $signedTransmittal, ?string $note): HrMechanism
+    {
+        $this->requireDocuments($mechanism);
+
+        $forCompliance = $mechanism->status === MechanismStatus::ForCompliance;
+        $to = $forCompliance ? MechanismStatus::TransmittalCompliance : MechanismStatus::TransmittalApproved;
+
+        $mechanism = DB::transaction(function () use ($mechanism, $by, $signedTransmittal, $note, $forCompliance, $to) {
+            $mechanism->attachments()->create([
+                'kind' => 'transmittal',
+                'path' => $signedTransmittal->store('hr-mechanisms/'.$mechanism->agency_id.'/'.$mechanism->id, 'local'),
+                'name' => $signedTransmittal->getClientOriginalName(),
+                'uploaded_by' => $by->id,
+            ]);
+
+            $from = $mechanism->status;
+            $mechanism->update(['status' => $to, 'date_transmitted' => now()] + ($forCompliance ? ['date_returned' => now()] : []));
+            $mechanism->recordEvent('transmitted', $by, $from, $to, $note);
+
+            return $mechanism;
+        });
+
+        if ($forCompliance) {
+            $this->tell(
+                $mechanism,
+                'For compliance',
+                'Your HR mechanism needs corrections before PSED can approve it.',
+                [(string) $mechanism->remarks, 'The signed transmittal, the reviewed HR mechanism and the HR checklist are attached. Correct the HR mechanism and upload it again from your tracking page.'],
+                true,
+            );
+        } else {
+            $this->tell(
+                $mechanism,
+                'Your HR mechanism was reviewed',
+                'Your HR mechanism was reviewed and approved by the PSED Chief.',
+                [
+                    'Print three (3) copies of the HR Mechanism for the signature of the Head of Agency, then submit the signed copies to the CSC Regional Office VIII for final approval.',
+                    'The reviewed HR mechanism, the signed transmittal and the HR checklist are attached.',
+                ],
+                true,
+            );
+        }
 
         return $mechanism;
     }
@@ -234,12 +293,44 @@ class ProcessHrMechanism
         return $mechanism;
     }
 
+    /** The Action Officer sent one approved copy to the Field Office and one to the agency; the third stays in the records of PSED. */
+    public function distribute(HrMechanism $mechanism, User $by, ?string $note): HrMechanism
+    {
+        DB::transaction(function () use ($mechanism, $by, $note) {
+            $mechanism->update(['date_distributed' => now()]);
+            $mechanism->recordEvent('distributed', $by, $mechanism->status, $mechanism->status, $note);
+        });
+
+        return $mechanism;
+    }
+
     /** @throws RuntimeException */
     private function requireDocuments(HrMechanism $mechanism): void
     {
         if (! $mechanism->hasReviewDocuments()) {
             throw new RuntimeException('Attach the reviewed HR mechanism and the HR checklist first.');
         }
+    }
+
+    /**
+     * The checklist the Chief signed with their DICT PNPKI certificate replaces the one the Action Officer forwarded. The
+     * earlier file is kept in the history of the mechanism, but the signed one is the checklist from now on.
+     *
+     * @param  array<string, mixed>  $signature
+     */
+    private function replaceChecklist(HrMechanism $mechanism, User $by, UploadedFile $file, array $signature): void
+    {
+        $mechanism->attachments()->create([
+            'kind' => 'checklist',
+            'path' => $file->store('hr-mechanisms/'.$mechanism->agency_id.'/'.$mechanism->id, 'local'),
+            'name' => $file->getClientOriginalName(),
+            'uploaded_by' => $by->id,
+            'signed_by' => $signature['signer'],
+            'signer_issuer' => $signature['issuer'],
+            'signed_checked_at' => now(),
+        ]);
+
+        $mechanism->recordEvent('checklist_signed', $by, null, null, 'The HR checklist was signed with a PNPKI certificate by '.$signature['signer'].' (issued by '.$signature['issuer'].') and replaces the checklist the Action Officer forwarded.');
     }
 
     /**

@@ -100,14 +100,14 @@ class StaffNotificationsTest extends TestCase
         $officer = $this->person(UserRole::PsedStaff);
         $chief = $this->person(UserRole::PsedChief, 'Chief');
         $director = $this->person(UserRole::Director);
-        $mechanism = $this->mechanism(MechanismStatus::ForChiefReview, $officer);
+        $mechanism = $this->mechanism(MechanismStatus::ReviewedByChief, $officer);
 
-        StaffNotices::reviewed($mechanism, $chief);
-        StaffNotices::returned($mechanism, $chief, 'The resolution is missing.');
-        $this->assertEqualsCanonicalizing(['reviewed', 'returned'], $this->kinds($officer));
+        StaffNotices::readyToTransmit($mechanism, $chief, forCompliance: false);
+        StaffNotices::returnedToOfficer($mechanism, $chief, 'The resolution is missing.');
+        $this->assertEqualsCanonicalizing(['reviewed', 'returned_to_officer'], $this->kinds($officer));
         $this->assertSame([], $this->kinds($chief));
 
-        $signed = $this->mechanism(MechanismStatus::ReviewedByChief, $officer);
+        $signed = $this->mechanism(MechanismStatus::TransmittalApproved, $officer);
         $this->actingAs($director)->post("/mechanisms/{$signed->id}/final-approve")->assertRedirect();
 
         $this->assertContains('approved', $this->kinds($officer));
@@ -140,7 +140,7 @@ class StaffNotificationsTest extends TestCase
         $officer = $this->person(UserRole::PsedStaff);
         $this->mechanism(MechanismStatus::Received, $officer, ['due_at' => null]);
         $this->mechanism(MechanismStatus::Approved, $officer, ['due_at' => now()->subDays(40)]);
-        $this->mechanism(MechanismStatus::ForCompliance, $officer, ['due_at' => now()->subDays(40)]);
+        $this->mechanism(MechanismStatus::TransmittalCompliance, $officer, ['due_at' => now()->subDays(40)]);
 
         $this->artisan('mechanisms:remind-due')->expectsOutput('Sent 0 reminders.')->assertSuccessful();
         $this->assertSame([], $this->kinds($officer));

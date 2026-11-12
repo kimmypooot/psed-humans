@@ -7,8 +7,10 @@ export const statusColors = {
     'Received by PSED': '#8a8d9e',
     'Routed to Action Officer': '#8f98e0',
     'Processing/Evaluating': '#4b55b5',
-    'For PSED Chief Review': '#2a338f',
-    'Reviewed by PSED Chief': '#d99a1b',
-    'For Compliance': '#c11421',
+    'Reviewed by PSED Chief': '#2a338f',
+    Reviewed: '#3d6fd1',
+    'For Compliance': '#e07a5f',
+    'Transmittal (Approved)': '#d99a1b',
+    'Transmittal (For Compliance)': '#c11421',
     Approved: '#1a7f4b',
 };

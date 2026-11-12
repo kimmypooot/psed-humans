@@ -101,7 +101,7 @@ const dates = computed(() => (m.value?.dates ?? []).filter((d) => d.value));
 
 // The documents PSED sends back. An imported (legacy) record has none of its own, but once it is worked in
 // the system (routed, forwarded to the Chief) its documents must show like any other.
-const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.attachments.some((a) => a.name) || m.value.can.acknowledge || m.value.can.work || m.value.can.review));
+const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.attachments.some((a) => a.name) || m.value.can.acknowledge || m.value.can.work || m.value.can.review || m.value.can.transmit));
 </script>
 
 <template>
@@ -128,8 +128,11 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
                 <StatusBadge :status="m.status" :tone="m.tone" class="px-3 py-1 text-sm" />
             </div>
 
-            <Alert v-if="m.status === 'For Compliance' && m.remarks" tone="danger" title="For compliance">{{ m.remarks }}</Alert>
-            <Alert v-else-if="m.status === 'Reviewed by PSED Chief'" tone="warning" title="Waiting for the signed copies">
+            <Alert v-if="m.status === 'Transmittal (For Compliance)' && m.remarks" tone="danger" title="For compliance">{{ m.remarks }}</Alert>
+            <Alert v-else-if="m.status === 'Reviewed' || m.status === 'For Compliance'" tone="warning" title="Print the transmittal">
+                The Chief decided ({{ m.status === 'Reviewed' ? 'approved' : 'for compliance' }}). The reviewed HR mechanism, the HR checklist and the transmittal are below. Print the transmittal, have the Regional Director sign it, then upload the signed copy to email the agency.
+            </Alert>
+            <Alert v-else-if="m.status === 'Transmittal (Approved)'" tone="warning" title="Waiting for the signed copies">
                 The agency was emailed the documents and told to print three (3) copies for the signature of the Head of Agency. Give the final approval once they reach the Regional Office.
             </Alert>
             <div v-if="m.turnaround?.running" class="flex flex-wrap items-center gap-2 text-sm text-text-muted">
@@ -179,7 +182,7 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
                         </template>
                         <template v-if="m.location"><dt class="text-text-muted">Location</dt><dd class="text-text">{{ m.location }}</dd></template>
                         <template v-if="m.receipt_details"><dt class="text-text-muted">Receipt</dt><dd class="text-text">{{ m.receipt_details }}</dd></template>
-                        <template v-if="m.remarks && m.status !== 'For Compliance'"><dt class="text-text-muted">Remarks</dt><dd class="whitespace-pre-line text-text">{{ m.remarks }}</dd></template>
+                        <template v-if="m.remarks && m.status !== 'Transmittal (For Compliance)'"><dt class="text-text-muted">Remarks</dt><dd class="whitespace-pre-line text-text">{{ m.remarks }}</dd></template>
                         <template v-if="m.document_name"><dt class="text-text-muted">File</dt><dd class="min-w-0 break-words text-text">{{ m.document_name }}</dd></template>
                     </dl>
                     <p v-if="m.is_legacy" class="mt-3 text-xs text-text-muted">Brought over from the old monitoring workbook; the agency's own file was not imported.</p>
@@ -191,13 +194,13 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
                                 <div class="min-w-0">
                                     <p class="text-text-muted">{{ a.label }}</p>
                                     <p v-if="a.name" class="truncate font-medium text-text">{{ a.name }}</p>
-                                    <p v-else-if="a.kind === 'transmittal'" class="text-xs text-text-muted">Made when the Chief approves or it is marked For Compliance</p>
+                                    <p v-else-if="a.kind === 'transmittal'" class="text-xs text-text-muted">Made when the Chief decides</p>
                                     <p v-else class="text-xs text-text-muted">Not attached yet</p>
                                 </div>
                                 <Button v-if="a.url" size="sm" variant="ghost" :href="a.url" external><Icon name="download" size="sm" />Open</Button>
                             </li>
                         </ul>
-                        <p class="mt-2 text-xs text-text-muted">The Action Officer attaches the reviewed HR mechanism and the HR checklist and forwards them to the PSED Chief. The Chief decides: for approval or for compliance. The transmittal is made only then, from the letter the Chief fills in, and all three are emailed to the agency.</p>
+                        <p class="mt-2 text-xs text-text-muted">The Action Officer attaches the reviewed HR mechanism and the HR checklist and forwards them to the PSED Chief. The Chief decides: approve, for compliance, or back to the officer. The transmittal is made from the letter the Chief fills in; the Action Officer prints it, the Regional Director signs it, and the signed copy is uploaded to email all three to the agency.</p>
                     </template>
 
                     <h3 class="mt-6 mb-3 text-sm font-semibold tracking-wide text-text uppercase">Dates</h3>

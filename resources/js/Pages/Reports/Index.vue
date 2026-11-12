@@ -56,7 +56,7 @@ const period = computed(() => {
     return 'All dates';
 });
 // Short column titles so the matrix fits; the full name is on hover.
-const short = { 'Received by PSED': 'Received', 'Routed to Action Officer': 'Routed', 'Processing/Evaluating': 'Processing', 'For PSED Chief Review': 'Chief review', 'Reviewed by PSED Chief': 'Reviewed', 'For Compliance': 'Compliance', Approved: 'Approved' };
+const short = { 'Received by PSED': 'Received', 'Routed to Action Officer': 'Routed', 'Processing/Evaluating': 'Processing', 'Reviewed by PSED Chief': 'Chief review', Reviewed: 'Reviewed', 'For Compliance': 'For compliance', 'Transmittal (Approved)': 'Sent (approved)', 'Transmittal (For Compliance)': 'Sent (compliance)', Approved: 'Approved' };
 const print = () => window.print();
 </script>
 
@@ -127,7 +127,7 @@ const print = () => window.print();
             </li>
             <li class="rounded-xl border border-danger-border bg-danger-bg p-4">
                 <p class="text-xs font-medium tracking-wide text-danger uppercase">For compliance</p>
-                <p class="mt-1 text-3xl font-semibold text-danger tabular-nums">{{ (totals['For Compliance'] ?? 0).toLocaleString() }}</p>
+                <p class="mt-1 text-3xl font-semibold text-danger tabular-nums">{{ (totals['Transmittal (For Compliance)'] ?? 0).toLocaleString() }}</p>
             </li>
         </ul>
 

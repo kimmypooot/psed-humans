@@ -25,7 +25,7 @@ class RemindDueMechanisms extends Command
         $sent = 0;
 
         HrMechanism::current()
-            ->whereIn('status', [MechanismStatus::Processing, MechanismStatus::ForChiefReview])
+            ->whereIn('status', [MechanismStatus::Routed, MechanismStatus::Processing, MechanismStatus::ReviewedByChief])
             ->whereNotNull('due_at')->whereNotNull('action_officer_id')
             ->with('agency')
             ->each(function (HrMechanism $m) use ($ahead, &$sent) {

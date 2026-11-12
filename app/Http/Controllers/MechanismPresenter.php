@@ -58,7 +58,10 @@ class MechanismPresenter
                 'work' => $gate->allows('work', $m),
                 'review' => $gate->allows('review', $m),
                 'returnForCompliance' => $gate->allows('returnForCompliance', $m),
+                'returnToOfficer' => $gate->allows('returnToOfficer', $m),
+                'transmit' => $gate->allows('transmit', $m),
                 'finalApprove' => $gate->allows('finalApprove', $m),
+                'distribute' => $gate->allows('distribute', $m),
             ],
         ];
     }
@@ -76,7 +79,15 @@ class MechanismPresenter
         return collect(HrMechanismAttachment::KINDS)->map(function (string $label, string $kind) use ($m, $canOpen, $current) {
             $file = $current->firstWhere('kind', $kind);
 
-            return ['kind' => $kind, 'label' => $label, 'name' => $file?->name, 'url' => $file && $canOpen ? "/mechanisms/{$m->id}/attachments/{$kind}" : null];
+            return [
+                'kind' => $kind,
+                'label' => $label,
+                'name' => $file?->name,
+                'url' => $file && $canOpen ? "/mechanisms/{$m->id}/attachments/{$kind}" : null,
+                // The PSED Chief's DICT PNPKI signature on the HR checklist, once they have signed it.
+                'signed_by' => $file?->signed_by,
+                'signer_issuer' => $file?->signer_issuer,
+            ];
         })->values()->all();
     }
 

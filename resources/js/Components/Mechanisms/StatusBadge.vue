@@ -4,7 +4,7 @@ import { breakable } from '@/Utils/format';
 
 /**
  * The status of an HR mechanism as a badge: grey Received, blue while PSED works on it, red For Compliance,
- * orange Reviewed by PSED Chief (waiting for the signed copies), green Approved. The label is always written out.
+ * orange Transmittal (Approved) (waiting for the signed copies), green Approved. The label is always written out.
  */
 defineProps({
     status: { type: String, required: true },

@@ -85,7 +85,7 @@ class ChiefNotificationTest extends TestCase
 
         $this->forward($officer, $mechanism)->assertRedirect();
 
-        $this->assertSame(MechanismStatus::ForChiefReview, $mechanism->fresh()->status);
+        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
         $this->assertCount(1, $chief->notifications, 'the in-app notice is kept');
     }
 
@@ -93,7 +93,7 @@ class ChiefNotificationTest extends TestCase
     {
         $chief = User::factory()->role(UserRole::PsedChief)->create();
         $other = User::factory()->role(UserRole::PsedChief)->create();
-        $mechanism = HrMechanism::factory()->create(['status' => MechanismStatus::ForChiefReview]);
+        $mechanism = HrMechanism::factory()->create(['status' => MechanismStatus::ReviewedByChief]);
         $chief->notify(new MechanismForwardedToChief($mechanism));
         $chief->notify(new MechanismForwardedToChief($mechanism));
         $other->notify(new MechanismForwardedToChief($mechanism));
@@ -121,7 +121,7 @@ class ChiefNotificationTest extends TestCase
     public function test_the_notice_link_opens_that_mechanism_over_the_list(): void
     {
         $chief = User::factory()->role(UserRole::PsedChief)->create();
-        $mechanism = HrMechanism::factory()->create(['status' => MechanismStatus::ForChiefReview]);
+        $mechanism = HrMechanism::factory()->create(['status' => MechanismStatus::ReviewedByChief]);
 
         $this->actingAs($chief)->get("/mechanisms?open={$mechanism->id}")->assertOk()
             ->assertInertia(fn ($page) => $page->component('Mechanisms/Index')->where('filters.open', (string) $mechanism->id));

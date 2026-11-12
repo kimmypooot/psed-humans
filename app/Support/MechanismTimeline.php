@@ -32,20 +32,21 @@ class MechanismTimeline
 
         $evaluating = match ($s) {
             MechanismStatus::Received => ['upcoming', 'The Action Officer evaluates it within '.Turnaround::days().' working days.', null],
-            MechanismStatus::Routed => ['current', 'Waiting for the Action Officer to acknowledge receipt. The '.Turnaround::days().'-day clock starts then.', null],
+            MechanismStatus::Routed => ['current', 'Waiting for the Action Officer to acknowledge receipt.'.$due, $m->routed_at],
             MechanismStatus::Processing => ['current', 'Being processed and evaluated.'.$due, $m->acknowledged_at],
-            MechanismStatus::ForCompliance => ['returned', 'Sent back to the agency for compliance. Correct it and upload it again.', $m->date_returned],
+            MechanismStatus::TransmittalCompliance => ['returned', 'Sent back to the agency for compliance. Correct it and upload it again.', $m->date_returned],
             default => ['done', 'Evaluated by the Action Officer.', $m->date_evaluated ?? $m->acknowledged_at],
         };
 
         $chief = match ($s) {
-            MechanismStatus::ForChiefReview => ['current', 'Waiting for the PSED Chief to review it.', $m->date_evaluated],
-            MechanismStatus::ReviewedByChief, MechanismStatus::Approved => ['done', 'Reviewed and approved by the PSED Chief.', $m->date_reviewed],
+            MechanismStatus::ReviewedByChief => ['current', 'Waiting for the PSED Chief to review it.', $m->date_evaluated],
+            MechanismStatus::Reviewed, MechanismStatus::ForCompliance, MechanismStatus::TransmittalApproved, MechanismStatus::Approved => ['done', 'Reviewed by the PSED Chief.', $m->date_reviewed],
             default => ['upcoming', 'The PSED Chief reviews what the Action Officer forwards.', null],
         };
 
         $approval = match ($s) {
-            MechanismStatus::ReviewedByChief => ['current', 'Print three (3) copies for the signature of the Head of Agency and submit them to the Regional Office.', $m->date_reviewed],
+            MechanismStatus::Reviewed, MechanismStatus::ForCompliance => ['current', "PSED is preparing the transmittal for the Regional Director's signature. The agency is emailed once it is signed.", null],
+            MechanismStatus::TransmittalApproved => ['current', 'Print three (3) copies for the signature of the Head of Agency and submit them to the Regional Office.', $m->date_transmitted],
             MechanismStatus::Approved => ['done', 'Approved by the Regional Office.', $m->date_approved],
             default => ['upcoming', 'After the Chief, the signed copies are submitted for final approval.', null],
         };
@@ -80,13 +81,20 @@ class MechanismTimeline
             'acknowledged' => 'Action Officer acknowledged receipt',
             'forwarded' => 'Forwarded to the PSED Chief',
             'returned' => 'For compliance',
+            'returned_to_officer' => 'Returned to the Action Officer for re-evaluation',
             'reviewed' => 'Reviewed by PSED Chief',
+            'marked_for_compliance' => 'Marked For Compliance by the PSED Chief',
+            'transmitted' => 'Signed transmittal sent to the agency',
             'approved' => 'Approved',
+            'distributed' => 'Approved copies distributed',
+            'checklist_signed' => 'HR checklist signed (PNPKI)',
             'email_failed' => 'Email not sent',
         ];
+        // Steps inside PSED the agency is not told about: it hears only when the signed transmittal goes out.
+        $internal = ['email_failed', 'checklist_signed', 'returned_to_officer', 'marked_for_compliance'];
 
         return $m->events()->with('user:id,name')->get()
-            ->reject(fn ($e) => $public && $e->action === 'email_failed')
+            ->reject(fn ($e) => $public && in_array($e->action, $internal, true))
             ->map(fn ($e) => [
                 'id' => $e->id,
                 'action' => $e->action,
@@ -98,7 +106,7 @@ class MechanismTimeline
                         default => 'PSED',
                     }
                     : ($e->user?->name ?? ($e->user_id === null && in_array($e->action, ['submitted', 'resubmitted'], true) ? 'Agency' : null)),
-                'remarks' => $public && in_array($e->action, ['routed', 'forwarded'], true) ? null : $e->remarks,
+                'remarks' => $public && in_array($e->action, ['routed', 'forwarded', 'transmitted', 'distributed'], true) ? null : $e->remarks,
                 'at' => $e->created_at?->toIso8601String(),
             ])->values()->all();
     }
@@ -110,14 +118,14 @@ class MechanismTimeline
      */
     public static function turnaround(HrMechanism $m): ?array
     {
-        if ($m->acknowledged_at === null || $m->due_at === null) {
+        if ($m->routed_at === null || $m->due_at === null) {
             return null;
         }
 
         $left = Turnaround::daysLeft($m->due_at);
 
         return [
-            'started' => $m->acknowledged_at->toIso8601String(),
+            'started' => $m->routed_at->toIso8601String(),
             'due' => $m->due_at->toIso8601String(),
             'days_left' => $left,
             'overdue' => $left < 0 && $m->status->clockRuns(),

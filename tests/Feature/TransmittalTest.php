@@ -13,12 +13,20 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Storage;
+use Tests\Concerns\SignsPdfs;
 use Tests\TestCase;
 use ZipArchive;
 
 class TransmittalTest extends TestCase
 {
     use RefreshDatabase;
+    use SignsPdfs;
+
+    /** A Chief's decision, with the HR checklist signed by that Chief with a PNPKI certificate. */
+    private function decision(User $chief, array $payload): array
+    {
+        return $payload + ['signed_checklist' => $this->signedPdf($chief->name)];
+    }
 
     private function imis(): void
     {
@@ -49,7 +57,7 @@ class TransmittalTest extends TestCase
     private function forReview(string $agencyName = 'Municipal Government of Javier, Leyte'): HrMechanism
     {
         $agency = Agency::factory()->create(['name' => $agencyName, 'listed' => true]);
-        $mechanism = HrMechanism::factory()->for($agency)->create(['status' => MechanismStatus::ForChiefReview, 'mechanism_type' => MechanismType::Msp, 'title' => 'Revised MSP']);
+        $mechanism = HrMechanism::factory()->for($agency)->create(['status' => MechanismStatus::ReviewedByChief, 'mechanism_type' => MechanismType::Msp, 'title' => 'Revised MSP']);
         foreach (['reviewed', 'checklist'] as $kind) {
             $mechanism->attachments()->create(['kind' => $kind, 'path' => "x/{$kind}.pdf", 'name' => "{$kind}.pdf"]);
         }
@@ -80,8 +88,9 @@ class TransmittalTest extends TestCase
         $this->imis();
         $mechanism = $this->forReview();
 
-        $this->actingAs(User::factory()->role(UserRole::PsedChief)->create())
-            ->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields(['signatory_id' => 50])])->assertRedirect();
+        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $this->actingAs($chief)
+            ->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 50])]))->assertRedirect();
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('9 March 2027', $text);
@@ -105,8 +114,9 @@ class TransmittalTest extends TestCase
         $this->imis();
         $mechanism = $this->forReview();
 
-        $this->actingAs(User::factory()->role(UserRole::PsedChief)->create())
-            ->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.', 'transmittal' => $this->fields()])->assertRedirect();
+        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $this->actingAs($chief)
+            ->post("/mechanisms/{$mechanism->id}/compliance", $this->decision($chief, ['remarks' => 'The resolution is missing.', 'transmittal' => $this->fields()]))->assertRedirect();
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('submitted to this office for further evaluation', $text);
@@ -126,10 +136,10 @@ class TransmittalTest extends TestCase
         $chief = User::factory()->role(UserRole::PsedChief)->create();
 
         // 12 is an employee, not the Director IV or the Director III.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields(['signatory_id' => 12])])->assertSessionHasErrors('transmittal.signatory_id');
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields(['addressee_name' => '', 'subject' => ''])])->assertSessionHasErrors(['transmittal.addressee_name', 'transmittal.subject']);
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 12])]))->assertSessionHasErrors('transmittal.signatory_id');
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['addressee_name' => '', 'subject' => ''])]))->assertSessionHasErrors(['transmittal.addressee_name', 'transmittal.subject']);
 
-        $this->assertSame(MechanismStatus::ForChiefReview, $mechanism->fresh()->status, 'nothing happened');
+        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status, 'nothing happened');
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
     }
 
@@ -150,9 +160,9 @@ class TransmittalTest extends TestCase
             ->assertJsonPath('signatories.1.label', 'Crucio, Gina A. — Director III')
             ->assertJsonCount(2, 'signatories');
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields()])->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields()]))->assertRedirect();
 
-        $again = HrMechanism::factory()->for($mechanism->agency)->create(['status' => MechanismStatus::ForChiefReview]);
+        $again = HrMechanism::factory()->for($mechanism->agency)->create(['status' => MechanismStatus::ReviewedByChief]);
         $this->actingAs($chief)->getJson("/mechanisms/{$again->id}/transmittal/compliance")->assertOk()
             ->assertJsonPath('defaults.addressee_name', 'Hon. Michael Dragon T. Javier')
             ->assertJsonPath('defaults.salutation', 'Mayor Javier');
@@ -221,7 +231,7 @@ class TransmittalTest extends TestCase
         $this->assertStringContainsString('is already recommended for approval', $slots['p2'][0][0], 'what was not rewritten is still the standard wording');
         $this->assertSame([['Thank you.']], $slots['thanks']);
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields() + ['body' => $body]])->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields() + ['body' => $body]]))->assertRedirect();
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('This refers to your 2027 Merit Selection Plan (MSP) and <b>markup</b> & more.', $text, 'markup typed in the editor is text, never markup');
@@ -277,7 +287,7 @@ class TransmittalTest extends TestCase
         $this->assertSame([['Very truly yours,']], $slots['closing']);
 
         // The same words end up in the Word file the Chief then generates.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['transmittal' => $this->fields(['signatory_id' => 50])])->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 50])]))->assertRedirect();
         $text = $this->letterText($mechanism);
         foreach (['p1', 'p2', 'p3'] as $paragraph) {
             $this->assertStringContainsString(implode('', array_column($slots[$paragraph], 0)), $text);
@@ -297,7 +307,7 @@ class TransmittalTest extends TestCase
         $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields())->assertOk()
             ->assertJsonPath('slots.p1.1.0', '2027 Revised Merit Selection Plan')
             ->assertJsonPath('slots.p1.1.1', 'b');
-        $this->assertSame(MechanismStatus::ForChiefReview, $mechanism->fresh()->status);
+        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
         Notification::assertNothingSent();
 
@@ -317,7 +327,7 @@ class TransmittalTest extends TestCase
             ->post("/mechanisms/{$mechanism->id}/transmittal/approval/preview", $this->fields());
 
         $response->assertOk()->assertDownload('DRAFT_Transmittal_ForApproval_'.$mechanism->tracking_code.'.docx');
-        $this->assertSame(MechanismStatus::ForChiefReview, $mechanism->fresh()->status);
+        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
         Notification::assertNothingSent();
     }

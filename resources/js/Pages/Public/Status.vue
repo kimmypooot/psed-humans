@@ -54,8 +54,10 @@ const callouts = {
     'Received by PSED': { tone: 'info', icon: 'clock', title: 'PSED received your submission', text: 'It will be routed to an Action Officer. You do not need to do anything now. We will email you as soon as something needs your attention.' },
     'Routed to Action Officer': { tone: 'info', icon: 'clock', title: 'Routed to an Action Officer', text: 'The Action Officer will acknowledge it and start evaluating it. You do not need to do anything now.' },
     'Processing/Evaluating': { tone: 'info', icon: 'clock', title: 'Being evaluated', text: 'The Action Officer is evaluating your HR mechanism. You do not need to do anything now.' },
-    'For PSED Chief Review': { tone: 'info', icon: 'clock', title: 'With the PSED Chief', text: 'The evaluation is done and the PSED Chief is reviewing it. We will email you the result.' },
-    'Reviewed by PSED Chief': { tone: 'warning', icon: 'printer', title: 'Next step: print three (3) copies', text: 'Print three (3) copies of the HR Mechanism for the signature of the Head of Agency.' },
+    'Reviewed by PSED Chief': { tone: 'info', icon: 'clock', title: 'With the PSED Chief', text: 'The evaluation is done and the PSED Chief is reviewing it. We will email you the result.' },
+    Reviewed: { tone: 'info', icon: 'clock', title: 'Reviewed by PSED', text: "PSED reviewed your HR mechanism and is preparing the transmittal for the Regional Director's signature. We will email you the documents. You do not need to do anything now." },
+    'For Compliance': { tone: 'info', icon: 'clock', title: 'Reviewed by PSED', text: "PSED reviewed your HR mechanism and is preparing the transmittal for the Regional Director's signature. We will email you what needs correcting. You do not need to do anything now." },
+    'Transmittal (Approved)': { tone: 'warning', icon: 'printer', title: 'Next step: print three (3) copies', text: 'Print three (3) copies of the HR Mechanism for the signature of the Head of Agency.' },
     Approved: { tone: 'success', icon: 'checkCircle', title: 'Approved', text: 'The Regional Office approved this HR mechanism. Nothing more is needed.' },
 };
 const callout = computed(() => callouts[props.mechanism.status] ?? null);
@@ -115,7 +117,7 @@ const tones = {
                 <div class="min-w-0">
                     <h2 class="text-base font-semibold">{{ callout.title }}</h2>
                     <p class="mt-0.5 text-sm text-text">{{ callout.text }}</p>
-                    <ol v-if="mechanism.status === 'Reviewed by PSED Chief'" class="mt-3 list-decimal space-y-1 pl-5 text-sm text-text marker:font-semibold">
+                    <ol v-if="mechanism.status === 'Transmittal (Approved)'" class="mt-3 list-decimal space-y-1 pl-5 text-sm text-text marker:font-semibold">
                         <li>Print the approved HR mechanism: three (3) copies.</li>
                         <li>Have the Head of Agency sign every copy.</li>
                         <li>Submit the signed copies to the CSC Regional Office VIII (PSED), Government Center, Palo, Leyte.</li>
@@ -123,12 +125,12 @@ const tones = {
                 </div>
             </section>
 
-            <section v-else-if="mechanism.status === 'For Compliance'" class="rounded-xl bg-danger-bg p-5 ring-1 ring-danger-border ring-inset animate-rise" aria-live="polite">
+            <section v-else-if="mechanism.status === 'Transmittal (For Compliance)'" class="rounded-xl bg-danger-bg p-5 ring-1 ring-danger-border ring-inset animate-rise" aria-live="polite">
                 <div class="flex gap-4">
                     <span class="grid size-10 shrink-0 place-items-center rounded-full bg-surface/70 text-danger" aria-hidden="true"><Icon name="exclamation" size="md" /></span>
                     <div class="min-w-0">
                         <h2 class="text-base font-semibold text-danger">For compliance</h2>
-                        <p class="mt-0.5 text-sm text-text">PSED emailed you the reviewed HR mechanism, the transmittal and the HR checklist. Please correct the HR mechanism and upload the new file below.</p>
+                        <p class="mt-0.5 text-sm text-text">PSED emailed you the reviewed HR mechanism, the signed transmittal and the HR checklist. Please correct the HR mechanism and upload the new file below.</p>
                     </div>
                 </div>
                 <blockquote v-if="mechanism.remarks" class="mt-4 rounded-lg bg-surface px-4 py-3 text-sm whitespace-pre-line text-text shadow-xs">

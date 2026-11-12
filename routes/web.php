@@ -85,6 +85,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/mechanisms/{mechanism}/acknowledge', [MechanismWorkflowController::class, 'acknowledge'])->whereNumber('mechanism')->name('mechanisms.acknowledge');
     Route::post('/mechanisms/{mechanism}/forward', [MechanismWorkflowController::class, 'forward'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.forward');
     Route::post('/mechanisms/{mechanism}/compliance', [MechanismWorkflowController::class, 'returnForCompliance'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.compliance');
+    Route::post('/mechanisms/{mechanism}/return-to-officer', [MechanismWorkflowController::class, 'returnToOfficer'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.return-to-officer');
+    Route::post('/mechanisms/{mechanism}/transmit', [MechanismWorkflowController::class, 'transmit'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.transmit');
+    Route::post('/mechanisms/{mechanism}/distribute', [MechanismWorkflowController::class, 'distribute'])->whereNumber('mechanism')->name('mechanisms.distribute');
     Route::post('/mechanisms/{mechanism}/chief-approve', [MechanismWorkflowController::class, 'chiefApprove'])->whereNumber('mechanism')->name('mechanisms.chief-approve');
     Route::post('/mechanisms/{mechanism}/final-approve', [MechanismWorkflowController::class, 'finalApprove'])->whereNumber('mechanism')->name('mechanisms.final-approve');
 });

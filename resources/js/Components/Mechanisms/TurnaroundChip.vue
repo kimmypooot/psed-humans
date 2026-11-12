@@ -5,9 +5,9 @@ import { toneClasses } from '@/Components/UI/tones';
 import { formatDate } from '@/Utils/format';
 
 /**
- * The 20-working-day countdown of the Action Officer, from the day receipt was acknowledged.
+ * The 20-working-day countdown of the Action Officer, from the day it was routed to the Action Officer.
  * Calm while there is time, orange in the last five days, red once overdue. It shows only
- * while the clock runs (Processing and For PSED Chief Review).
+ * while the clock runs (Routed, Processing and Reviewed by PSED Chief).
  */
 const props = defineProps({
     turnaround: { type: Object, default: null },

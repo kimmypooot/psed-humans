@@ -51,7 +51,7 @@ class TrackingController extends Controller
     public function show(HrMechanism $mechanism): Response
     {
         $mechanism->load('agency.fieldOffice');
-        $returned = $mechanism->status === MechanismStatus::ForCompliance;
+        $returned = $mechanism->status === MechanismStatus::TransmittalCompliance;
 
         return Inertia::render('Public/Status', [
             'mechanism' => [
@@ -75,7 +75,7 @@ class TrackingController extends Controller
 
     public function resubmit(Request $request, HrMechanism $mechanism, SubmitHrMechanism $submit): RedirectResponse
     {
-        abort_unless($mechanism->status === MechanismStatus::ForCompliance, 403, 'This HR mechanism is not waiting for a corrected file.');
+        abort_unless($mechanism->status === MechanismStatus::TransmittalCompliance, 403, 'This HR mechanism is not waiting for a corrected file.');
 
         $data = $request->validate([
             'document' => ['required', 'file', 'extensions:docx', 'mimes:docx', 'max:'.config('hrmm.max_upload_kb')],

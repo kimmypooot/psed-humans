@@ -8,6 +8,7 @@ use App\Models\Agency;
 use App\Models\HrMechanism;
 use App\Notifications\MechanismStatusChanged;
 use App\Support\StaffNotices;
+use App\Support\Turnaround;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -59,7 +60,7 @@ class SubmitHrMechanism
     /**
      * Replaces the file of a mechanism sent back for compliance. It goes back to the Action Officer it
      * was with (or to PSED to route, if it never had one), and the 20-day clock starts again when
-     * the officer acknowledges it.
+     * it is back with the officer (or is routed).
      */
     public function resubmit(HrMechanism $mechanism, UploadedFile $document, ?string $note): HrMechanism
     {
@@ -75,7 +76,8 @@ class SubmitHrMechanism
                 'date_submitted' => now(),
                 'routed_at' => $to === MechanismStatus::Routed ? now() : null,
                 'acknowledged_at' => null,
-                'due_at' => null,
+                // Back with its officer: the 20-day clock starts again now. Otherwise it starts when PSED routes it.
+                'due_at' => $to === MechanismStatus::Routed ? Turnaround::dueFrom(now()) : null,
                 'date_returned' => null,
                 'date_evaluated' => null,
                 'date_reviewed' => null,

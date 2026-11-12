@@ -18,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 #[Fillable([
     'agency_id', 'tracking_code', 'mechanism_type', 'title', 'copies', 'document_path', 'document_name', 'status', 'processor',
     'action_officer_id', 'routed_at', 'acknowledged_at', 'due_at',
-    'date_submitted', 'date_processed', 'date_evaluated', 'date_reviewed', 'date_returned', 'date_submitted_to_rd', 'date_approved',
+    'date_submitted', 'date_processed', 'date_evaluated', 'date_reviewed', 'date_returned', 'date_transmitted', 'date_submitted_to_rd', 'date_approved', 'date_distributed',
     'remarks', 'receipt_details', 'location', 'submitted_by', 'contact_email', 'contact_name', 'is_legacy',
 ])]
 class HrMechanism extends Model
@@ -40,8 +40,10 @@ class HrMechanism extends Model
             'date_evaluated' => 'datetime',
             'date_reviewed' => 'datetime',
             'date_returned' => 'datetime',
+            'date_transmitted' => 'datetime',
             'date_submitted_to_rd' => 'datetime',
             'date_approved' => 'datetime',
+            'date_distributed' => 'datetime',
             'is_legacy' => 'boolean',
         ];
     }
@@ -144,7 +146,7 @@ class HrMechanism extends Model
     public function scopeCurrent(Builder $query): Builder
     {
         return $query->where(fn (Builder $q) => $q
-            ->where('hr_mechanisms.status', '!=', MechanismStatus::ForCompliance->value)
+            ->where('hr_mechanisms.status', '!=', MechanismStatus::TransmittalCompliance->value)
             ->orWhereNotExists(fn ($later) => $later->selectRaw('1')->from('hr_mechanisms as newer')
                 ->whereColumn('newer.agency_id', 'hr_mechanisms.agency_id')
                 ->whereColumn('newer.mechanism_type', 'hr_mechanisms.mechanism_type')

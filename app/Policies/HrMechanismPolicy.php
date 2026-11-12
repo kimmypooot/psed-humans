@@ -33,10 +33,10 @@ class HrMechanismPolicy
         return $user->isPsed() && $mechanism->action_officer_id === $user->id && $mechanism->status === MechanismStatus::Processing;
     }
 
-    /** The Chief reviews what the Action Officer forwarded, and decides: for approval or for compliance. */
+    /** The Chief reviews what the Action Officer forwarded, and decides: approve, for compliance, or back to the officer. */
     public function review(User $user, HrMechanism $mechanism): bool
     {
-        return $user->isChief() && $mechanism->status === MechanismStatus::ForChiefReview;
+        return $user->isChief() && $mechanism->status === MechanismStatus::ReviewedByChief;
     }
 
     /** For Compliance is the Chief's decision, made when reviewing: the Action Officer only forwards. */
@@ -45,10 +45,36 @@ class HrMechanismPolicy
         return $this->review($user, $mechanism);
     }
 
-    /** The Director IV, or PSED on their behalf, once the signed copies are in. */
+    /** Not approved: the Chief sends it back to the Action Officer to evaluate again. */
+    public function returnToOfficer(User $user, HrMechanism $mechanism): bool
+    {
+        return $this->review($user, $mechanism) && $mechanism->action_officer_id !== null;
+    }
+
+    /**
+     * After the Chief decides, the Action Officer prints the transmittal, has the Regional Director sign it, and
+     * records that here. That is when the agency is emailed.
+     */
+    public function transmit(User $user, HrMechanism $mechanism): bool
+    {
+        return $user->isPsed()
+            && $mechanism->action_officer_id === $user->id
+            && in_array($mechanism->status, [MechanismStatus::Reviewed, MechanismStatus::ForCompliance], true);
+    }
+
+    /** The Regional Director, or PSED on their behalf, once the Head of Agency's signed copies are in. */
     public function finalApprove(User $user, HrMechanism $mechanism): bool
     {
-        return ($user->role === UserRole::Director || $user->isPsed()) && $mechanism->status === MechanismStatus::ReviewedByChief;
+        return ($user->role === UserRole::Director || $user->isPsed()) && $mechanism->status === MechanismStatus::TransmittalApproved;
+    }
+
+    /** The Action Officer sends the approved copies to the Field Office and the agency, and keeps the third. */
+    public function distribute(User $user, HrMechanism $mechanism): bool
+    {
+        return $user->isPsed()
+            && $mechanism->action_officer_id === $user->id
+            && $mechanism->status === MechanismStatus::Approved
+            && $mechanism->date_distributed === null;
     }
 
     /** PSED and the Director open the files; Field Offices only see statuses. */
