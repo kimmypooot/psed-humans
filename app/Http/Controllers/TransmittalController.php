@@ -13,7 +13,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * The transmittal letter, before it is sent: what the form starts with, and a draft to read.
- * The Action Officer generates the letter after the Chief approves or marks it For Compliance
+ * The Action Officer generates the letter after the Chief approves, choosing Approved or For Compliance
  * (MechanismWorkflowController::generateTransmittal); only they may see its draft. The Chief may list the
  * documents the officer forwarded (`documents=1`) while deciding.
  */
@@ -90,18 +90,17 @@ class TransmittalController extends Controller
         return $fields + ['signatory_name' => $signatory['printed'], 'signatory_position' => $signatory['position']];
     }
 
-    /** The Action Officer drafts the letter the Chief's decision calls for. The Chief may only list the documents. */
+    /** The Action Officer drafts either letter. The Chief may only list the documents. */
     private function authorizeFor(HrMechanism $mechanism, string $type, bool $documentsOnly = false): void
     {
         abort_unless(isset(Transmittal::TYPES[$type]), 404);
 
         if ($documentsOnly) {
-            $this->authorize($type === 'approval' ? 'review' : 'returnForCompliance', $mechanism);
+            $this->authorize('review', $mechanism);
 
             return;
         }
 
         $this->authorize('generateTransmittal', $mechanism);
-        abort_unless(Transmittal::typeFor($mechanism) === $type, 404);
     }
 }

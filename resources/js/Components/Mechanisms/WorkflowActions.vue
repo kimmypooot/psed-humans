@@ -18,9 +18,10 @@ import { request, requestJson, downloadFile, errorMessage } from '@/Utils/http';
  * (`mechanism.can`) shows, and the server checks again on every request:
  *   Route (PSED staff) -> Acknowledge receipt (Action Officer, starts the 20-day clock) ->
  *   Forward to the Chief (with the reviewed HR mechanism and the HR checklist) ->
- *   Approve / For compliance / Return to the officer (PSED Chief; the Chief signs the checklist with their PNPKI certificate) ->
- *   Generate the transmittal (Action Officer) -> Transmit (Action Officer: the Regional Director signed the printed transmittal; this emails the agency) ->
+ *   Approve / Return to AO (PSED Chief; approving means signing the checklist with their PNPKI certificate) ->
+ *   Generate the transmittal (Action Officer, who chooses Approved or For Compliance) -> Transmit (Action Officer: the Regional Director signed the printed transmittal; this emails the agency) ->
  *   Final approve (Regional Director or PSED) -> Record distribution (Action Officer).
+ * Correct and resend (Action Officer) sends corrected documents to the agency after Transmit.
  * Undo takes back the most recent step (routing, acknowledging, forwarding, the Chief's decision) while nothing has left PSED.
  * The Chief reviews what was forwarded and decides. Nothing reaches the agency until the Action Officer transmits.
  * The Chief only signs the checklist. The Action Officer makes the transmittal letter from the letter fields
@@ -44,7 +45,7 @@ const myId = computed(() => String(page.props.auth.user.id));
 const action = ref(null);
 const fileKey = ref(0);
 const blankLetter = () => ({ date: '', addressee_name: '', addressee_position: '', addressee_address: '', salutation: '', subject: '', signatory_id: '' });
-const form = useForm({ officer_id: '', note: '', remarks: '', reviewed: null, checklist: null, signed_checklist: null, signed_transmittal: null, transmittal: blankLetter() });
+const form = useForm({ officer_id: '', type: '', note: '', remarks: '', reviewed: null, checklist: null, signed_checklist: null, signed_transmittal: null, transmittal: blankLetter() });
 
 const kinds = [
     { key: 'reviewed', label: 'Reviewed HR mechanism' },
@@ -56,11 +57,11 @@ const steps = {
     route: { title: 'Route to an Action Officer', url: 'route', button: 'Route', variant: 'primary', icon: 'arrowRight', text: 'Choose the PSED staff member who will evaluate this HR mechanism. You may choose yourself.' },
     acknowledge: { title: 'Acknowledge receipt', url: 'acknowledge', button: 'Acknowledge receipt', variant: 'primary', icon: 'check', text: 'The status becomes Processing/Evaluating. The 20-working-day turnaround has been running since it was routed to you.' },
     forward: { title: 'Forward to the PSED Chief', url: 'forward', button: 'Forward to the Chief', variant: 'primary', icon: 'arrowRight', docs: true, text: 'You finished evaluating. Attach the reviewed HR mechanism and the HR checklist. The PSED Chief reviews them and decides: approve, for compliance, or send it back to you to evaluate again.' },
-    compliance: { title: 'Mark For Compliance', url: 'compliance', button: 'Mark For Compliance', variant: 'danger', icon: 'exclamation', remarks: true, forwarded: 'compliance', signed: true, text: 'Your review found it needs corrections. Sign the HR checklist with your DICT PNPKI certificate and upload it. The Action Officer then generates the For Compliance transmittal, has the Regional Director sign it, and sends it to the agency.' },
     back: { title: 'Return to AO', url: 'return-to-officer', button: 'Return to AO', variant: 'outline', icon: 'chevronLeft', remarks: true, remarksLabel: 'What the Action Officer should look at again', text: 'You are not approving it yet. It goes back to the Action Officer to evaluate again, then comes back to you. The 20-day clock keeps running.' },
-    chief: { title: 'Approve (PSED Chief)', url: 'chief-approve', button: 'Approve', variant: 'success', icon: 'checkCircle', forwarded: 'approval', signed: true, text: 'Your review found it ready for approval. Sign the HR checklist with your DICT PNPKI certificate and upload it. The status becomes Reviewed. The Action Officer then generates the For Approval transmittal, has the Regional Director sign it, and sends it to the agency.' },
-    generate: { title: 'Generate the transmittal', url: 'generate-transmittal', button: 'Generate the transmittal', variant: 'primary', icon: 'arrowRight', letter: 'auto', text: 'The PSED Chief decided. Fill in the transmittal letter and generate it. Then open it under Documents, print it, and have the Regional Director (or Assistant Regional Director) sign it. You can generate it again until it is sent.' },
+    chief: { title: 'Approve (PSED Chief)', url: 'chief-approve', button: 'Approve', variant: 'success', icon: 'checkCircle', forwarded: 'approval', signed: true, text: 'Your review agrees with it. Sign the HR checklist with your DICT PNPKI certificate and upload it; it replaces the checklist the Action Officer forwarded. The status becomes Reviewed. The Action Officer then chooses the transmittal (Approved, or For Compliance if the HR mechanism needs corrections), has the Regional Director sign it, and sends it to the agency. If you do not agree with it yet, use Return to AO instead.' },
+    generate: { title: 'Generate the transmittal', url: 'generate-transmittal', button: 'Generate the transmittal', variant: 'primary', icon: 'arrowRight', letter: 'auto', text: 'The PSED Chief reviewed it. Choose the transmittal: Approved, or For Compliance if the HR mechanism needs corrections (then say what the agency must correct). Fill in the letter and generate it. Then open it under Documents, print it, and have the Regional Director (or Assistant Regional Director) sign it. You can generate it again, even with the other type, until it is sent.' },
     transmit: { title: 'Transmit to the agency', url: 'transmit', button: 'Email the agency', variant: 'primary', icon: 'arrowRight', transmit: true, text: 'Upload the transmittal the Regional Director signed. The status becomes Transmittal (Approved) or Transmittal (For Compliance), and the agency is emailed the reviewed HR mechanism, the signed transmittal and the HR checklist.' },
+    correct: { title: 'Correct and resend', url: 'correct', button: 'Email the corrected documents', variant: 'primary', icon: 'arrowRight', correct: true, remarks: true, remarksLabel: 'What was wrong, and what was corrected', text: 'Use this when what the agency was sent is wrong. Upload the corrected transmittal signed by the Regional Director. If the reviewed HR mechanism changed, attach it too. The agency is emailed the current documents and told to use them instead of the earlier ones. The status does not change, and your note stays inside PSED.' },
     undo: { title: 'Undo the last step', url: 'undo', button: 'Undo', variant: 'danger', icon: 'chevronLeft', remarks: true, remarksLabel: 'Why is this being undone?', text: 'This puts the mechanism back one step. Nothing is deleted: the step and your reason stay in the history. Once the agency has been emailed, a step can no longer be undone.' },
     final: { title: 'Final approval', url: 'final-approve', button: 'Final approve', variant: 'success', icon: 'shield', text: "Confirm the Head of Agency's signed copies reached the Regional Office. The mechanism becomes Approved." },
     distribute: { title: 'Record distribution', url: 'distribute', button: 'Record distribution', variant: 'primary', icon: 'check', text: 'Confirm that one approved copy went to the CSC Field Office, one to the agency, and the third is kept in the records of the Policies and Systems Evaluation Division.' },
@@ -115,6 +116,12 @@ const open = (key) => {
     standard.value = {};
     action.value = key;
 
+    // The Action Officer chooses the outcome; it starts as what was chosen last time.
+    if (key === 'generate') {
+        form.type = props.mechanism.status === 'For Compliance' ? 'compliance' : 'approval';
+        form.remarks = props.mechanism.status === 'For Compliance' ? (props.mechanism.remarks ?? '') : '';
+    }
+
     if (steps[key].letter) loadLetter(letterType.value);
     else if (steps[key].forwarded) loadLetter(steps[key].forwarded, true);
 };
@@ -125,7 +132,12 @@ const close = () => {
 const step = computed(() => (action.value ? steps[action.value] : null));
 const stepTitle = computed(() => (action.value === 'undo' ? props.mechanism.undo_label : step.value?.title) ?? '');
 // The letter the Chief's decision calls for: For Compliance when the Chief marked it so.
-const letterType = computed(() => (step.value?.letter === 'auto' ? (props.mechanism.status === 'For Compliance' ? 'compliance' : 'approval') : step.value?.letter));
+const letterType = computed(() => (step.value?.letter === 'auto' ? form.type || 'approval' : step.value?.letter));
+const transmittalTypes = [
+    { value: 'approval', label: 'Approved' },
+    { value: 'compliance', label: 'For Compliance' },
+];
+const needsCorrections = computed(() => action.value === 'generate' && form.type === 'compliance');
 
 const loadLetter = async (type, documentsOnly = false) => {
     letterLoading.value = true;
@@ -289,10 +301,10 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
         <Button v-if="mechanism.can.acknowledge" :size="size" @click="open('acknowledge')"><Icon name="check" size="sm" />Acknowledge</Button>
         <Button v-if="mechanism.can.work" :size="size" @click="open('forward')">Forward to Chief</Button>
         <Button v-if="mechanism.can.review" :size="size" variant="success" @click="open('chief')">Approve</Button>
-        <Button v-if="mechanism.can.returnForCompliance" :size="size" variant="danger" @click="open('compliance')">For compliance</Button>
         <Button v-if="mechanism.can.returnToOfficer" :size="size" variant="outline" @click="open('back')">Return to AO</Button>
         <Button v-if="mechanism.can.generateTransmittal" :size="size" :variant="mechanism.can.transmit ? 'outline' : 'primary'" @click="open('generate')">{{ mechanism.can.transmit ? 'Regenerate transmittal' : 'Generate transmittal' }}</Button>
         <Button v-if="mechanism.can.transmit" :size="size" @click="open('transmit')">Transmit to agency</Button>
+        <Button v-if="mechanism.can.correct" :size="size" variant="outline" @click="open('correct')">Correct and resend</Button>
         <Button v-if="mechanism.can.finalApprove" :size="size" variant="success" @click="open('final')">Final approve</Button>
         <Button v-if="mechanism.can.distribute" :size="size" @click="open('distribute')">Record distribution</Button>
         <Button v-if="mechanism.can.undo" :size="size" variant="ghost" @click="open('undo')"><Icon name="chevronLeft" size="sm" />{{ mechanism.undo_label }}</Button>
@@ -355,8 +367,21 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
                     </div>
                 </template>
 
+                <!-- The corrected documents -->
+                <template v-if="step.correct">
+                    <FormGroup id="wf-corrected-transmittal" label="Corrected transmittal, signed by the Regional Director" required :error="form.errors.signed_transmittal" helper-text="PDF, image or Word file.">
+                        <FileInput id="wf-corrected-transmittal" :key="`corrected-${fileKey}`" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" :max-size-mb="20" @update:model-value="form.signed_transmittal = $event" />
+                    </FormGroup>
+                    <FormGroup id="wf-corrected-reviewed" label="Reviewed HR mechanism (only if it changed)" :error="form.errors.reviewed" helper-text="Leave empty to keep the one already attached.">
+                        <FileInput id="wf-corrected-reviewed" :key="`corrected-reviewed-${fileKey}`" accept=".pdf,.doc,.docx,.xls,.xlsx,.zip" :max-size-mb="20" @update:model-value="form.reviewed = $event" />
+                    </FormGroup>
+                </template>
+
                 <!-- The transmittal letter -->
                 <template v-if="step.letter">
+                    <FormGroup v-if="step.letter === 'auto'" id="wf-type" label="Transmittal" required :error="form.errors.type" helper-text="Approved if the HR mechanism can be approved as it is. For Compliance if the agency must correct something first.">
+                        <Combobox id="wf-type" v-model="form.type" :options="transmittalTypes" :allow-custom="false" :invalid="!!form.errors.type" placeholder="Choose the transmittal" />
+                    </FormGroup>
                     <div class="space-y-4 rounded-lg border border-border p-4">
                         <div class="flex flex-wrap items-center justify-between gap-2">
                             <h3 class="text-sm font-semibold text-text">Transmittal ({{ letterType === 'approval' ? 'For Approval' : 'For Compliance' }})</h3>
@@ -422,10 +447,10 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
                     </div>
                 </template>
 
-                <FormGroup v-if="step.remarks" id="wf-remarks" :label="step.remarksLabel ?? 'What needs correcting'" required :error="form.errors.remarks">
+                <FormGroup v-if="step.remarks || needsCorrections" id="wf-remarks" :label="step.remarksLabel ?? 'What the agency needs to correct'" required :error="form.errors.remarks" :helper-text="needsCorrections ? 'This goes to the agency in the email and on their tracking page.' : undefined">
                     <Textarea id="wf-remarks" v-model="form.remarks" :rows="4" required :invalid="!!form.errors.remarks" />
                 </FormGroup>
-                <FormGroup v-else-if="action !== 'acknowledge'" id="wf-note" label="Note (optional)" :error="form.errors.note">
+                <FormGroup v-else-if="action !== 'acknowledge' && action !== 'generate'" id="wf-note" label="Note (optional)" :error="form.errors.note">
                     <Textarea id="wf-note" v-model="form.note" :rows="3" />
                 </FormGroup>
 
@@ -470,7 +495,7 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
                     <Button v-if="previewing" variant="secondary" @click="previewing = false"><Icon name="chevronLeft" size="sm" />Back to edit</Button>
                     <Button v-else variant="secondary" @click="close">Cancel</Button>
                     <Button v-if="action === 'route'" variant="outline" :loading="form.processing" @click="routeToMe">Route to myself</Button>
-                    <Button type="submit" :variant="step.variant" :loading="form.processing" :disabled="(action === 'route' && !form.officer_id) || (step.letter && (letterLoading || letterFailed))">{{ step.button }}</Button>
+                    <Button type="submit" :variant="step.variant" :loading="form.processing" :disabled="(action === 'route' && !form.officer_id) || (action === 'generate' && !form.type) || (step.letter && (letterLoading || letterFailed))">{{ step.button }}</Button>
                 </div>
             </form>
         </Modal>

@@ -66,19 +66,17 @@ class StaffNotices
     }
 
     /**
-     * The Chief decided: the officer prints the transmittal, has the Regional Director sign it, then sends it to the agency.
-     * Nothing has gone to the agency yet.
+     * The Chief reviewed it: the officer chooses Approved or For Compliance, generates the transmittal, prints it for the
+     * Regional Director's signature, then sends it to the agency. Nothing has gone to the agency yet.
      */
-    public static function readyToTransmit(HrMechanism $m, User $by, bool $forCompliance): void
+    public static function readyToTransmit(HrMechanism $m, User $by): void
     {
-        $what = $forCompliance ? 'marked For Compliance by '.$by->name.': '.str((string) $m->remarks)->limit(120) : 'approved by '.$by->name;
-
         self::send(
             self::users([$m->action_officer_id], except: $by),
             $m,
-            $forCompliance ? 'marked_for_compliance' : 'reviewed',
-            $forCompliance ? 'For Compliance: generate the transmittal' : 'Reviewed: generate the transmittal',
-            self::what($m).' was '.$what.'. Generate the transmittal, print it for the Regional Director\'s signature, then record it in the system to email the agency.',
+            'reviewed',
+            'Reviewed: generate the transmittal',
+            self::what($m).' was reviewed by '.$by->name.'. Choose Approved or For Compliance and generate the transmittal, print it for the Regional Director\'s signature, then record it in the system to email the agency.',
         );
     }
 

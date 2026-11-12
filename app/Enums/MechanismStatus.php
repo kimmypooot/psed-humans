@@ -17,9 +17,9 @@ enum MechanismStatus: string
     case Processing = 'Processing/Evaluating';
     /** Forwarded by the Action Officer; waiting for the Chief's decision. */
     case ReviewedByChief = 'Reviewed by PSED Chief';
-    /** The Chief approved: the Action Officer prints the transmittal for the Regional Director's signature. */
+    /** The Chief reviewed it and signed the checklist. The Action Officer now chooses the transmittal: Approved (the status stays Reviewed) or For Compliance. */
     case Reviewed = 'Reviewed';
-    /** The Chief marked it For Compliance: same, but the agency is told what to correct. */
+    /** The Action Officer chose a For Compliance transmittal: the agency is told what to correct once it is signed and sent. */
     case ForCompliance = 'For Compliance';
     /** The signed transmittal and the documents were emailed: the agency is signing three copies. */
     case TransmittalApproved = 'Transmittal (Approved)';

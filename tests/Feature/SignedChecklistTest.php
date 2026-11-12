@@ -148,29 +148,13 @@ class SignedChecklistTest extends TestCase
         // Only when the Action Officer sends the signed transmittal does the agency get the signed checklist.
         $officer = User::factory()->role(UserRole::PsedStaff)->create();
         $mechanism->update(['action_officer_id' => $officer->id]);
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", ['type' => 'approval'] + $this->letter())->assertRedirect()->assertSessionHasNoErrors();
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 20)])->assertRedirect();
         $this->assertSame(MechanismStatus::TransmittalApproved, $mechanism->fresh()->status);
 
         Notification::assertSentOnDemand(MechanismStatusChanged::class, fn ($n) => $n->mechanism->is($mechanism)
             && collect($n->attachments)->firstWhere('kind', 'checklist')->name === 'HR Checklist - Mayorga (signed).pdf'
             && collect($n->attachments)->pluck('kind')->sort()->values()->all() === ['checklist', 'reviewed', 'transmittal']);
-    }
-
-    public function test_the_same_applies_when_the_chief_sends_it_back_for_compliance(): void
-    {
-        $mechanism = $this->forReview();
-        $post = fn (?UploadedFile $signed) => $this->actingAs($this->chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.'] + ($signed ? ['signed_checklist' => $signed] : []));
-
-        $post(null)->assertSessionHasErrors('signed_checklist');
-        $post($this->signedPdf('SOMEONE ELSE ENTIRELY'))->assertSessionHasErrors('signed_checklist');
-        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
-
-        $post($this->signedPdf('BANELLO PABUA GABON'))->assertRedirect();
-
-        $mechanism->refresh();
-        $this->assertSame(MechanismStatus::ForCompliance, $mechanism->status);
-        $this->assertSame('BANELLO PABUA GABON', $mechanism->currentAttachments()->firstWhere('kind', 'checklist')->signed_by);
     }
 
     public function test_the_signature_shows_on_the_document_but_not_to_the_agency(): void

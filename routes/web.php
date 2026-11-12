@@ -84,8 +84,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/mechanisms/{mechanism}/route', [MechanismWorkflowController::class, 'route'])->whereNumber('mechanism')->name('mechanisms.route');
     Route::post('/mechanisms/{mechanism}/acknowledge', [MechanismWorkflowController::class, 'acknowledge'])->whereNumber('mechanism')->name('mechanisms.acknowledge');
     Route::post('/mechanisms/{mechanism}/forward', [MechanismWorkflowController::class, 'forward'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.forward');
-    Route::post('/mechanisms/{mechanism}/compliance', [MechanismWorkflowController::class, 'returnForCompliance'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.compliance');
     Route::post('/mechanisms/{mechanism}/return-to-officer', [MechanismWorkflowController::class, 'returnToOfficer'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.return-to-officer');
+    Route::post('/mechanisms/{mechanism}/correct', [MechanismWorkflowController::class, 'correct'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.correct');
     Route::post('/mechanisms/{mechanism}/undo', [MechanismWorkflowController::class, 'undo'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.undo');
     Route::post('/mechanisms/{mechanism}/generate-transmittal', [MechanismWorkflowController::class, 'generateTransmittal'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.generate-transmittal');
     Route::post('/mechanisms/{mechanism}/transmit', [MechanismWorkflowController::class, 'transmit'])->whereNumber('mechanism')->middleware('throttle:30,1')->name('mechanisms.transmit');

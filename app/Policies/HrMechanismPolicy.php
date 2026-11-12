@@ -34,16 +34,10 @@ class HrMechanismPolicy
         return $user->isPsed() && $mechanism->action_officer_id === $user->id && $mechanism->status === MechanismStatus::Processing;
     }
 
-    /** The Chief reviews what the Action Officer forwarded, and decides: approve, for compliance, or back to the officer. */
+    /** The Chief reviews what the Action Officer forwarded, and decides: approve (agree with it and sign the checklist), or back to the officer. */
     public function review(User $user, HrMechanism $mechanism): bool
     {
         return $user->isChief() && $mechanism->status === MechanismStatus::ReviewedByChief;
-    }
-
-    /** For Compliance is the Chief's decision, made when reviewing: the Action Officer only forwards. */
-    public function returnForCompliance(User $user, HrMechanism $mechanism): bool
-    {
-        return $this->review($user, $mechanism);
     }
 
     /** Not approved: the Chief sends it back to the Action Officer to evaluate again. */
@@ -71,7 +65,7 @@ class HrMechanismPolicy
         };
     }
 
-    /** After the Chief decides, the Action Officer generates the transmittal letter. */
+    /** After the Chief approves, the Action Officer chooses Approved or For Compliance and generates the transmittal letter. */
     public function generateTransmittal(User $user, HrMechanism $mechanism): bool
     {
         return $this->transmit($user, $mechanism);
@@ -86,6 +80,17 @@ class HrMechanismPolicy
         return $user->isPsed()
             && $mechanism->action_officer_id === $user->id
             && in_array($mechanism->status, [MechanismStatus::Reviewed, MechanismStatus::ForCompliance], true);
+    }
+
+    /**
+     * After the agency was emailed, the Action Officer may send corrected documents (the signed transmittal, and the reviewed HR
+     * mechanism if it changed) until the Regional Office gives its final approval, or the agency sends its corrected file.
+     */
+    public function correct(User $user, HrMechanism $mechanism): bool
+    {
+        return $user->isPsed()
+            && $mechanism->action_officer_id === $user->id
+            && in_array($mechanism->status, [MechanismStatus::TransmittalApproved, MechanismStatus::TransmittalCompliance], true);
     }
 
     /** The Regional Director, or PSED on their behalf, once the Head of Agency's signed copies are in. */

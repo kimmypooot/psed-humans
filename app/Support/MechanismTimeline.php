@@ -85,6 +85,7 @@ class MechanismTimeline
             'reviewed' => 'Reviewed by PSED Chief',
             'marked_for_compliance' => 'Marked For Compliance by the PSED Chief',
             'transmitted' => 'Signed transmittal sent to the agency',
+            'retransmitted' => 'Corrected documents sent to the agency',
             'approved' => 'Approved',
             'distributed' => 'Approved copies distributed',
             'checklist_signed' => 'HR checklist signed (PNPKI)',
@@ -108,7 +109,7 @@ class MechanismTimeline
                         default => 'PSED',
                     }
                     : ($e->user?->name ?? ($e->user_id === null && in_array($e->action, ['submitted', 'resubmitted'], true) ? 'Agency' : null)),
-                'remarks' => $public && in_array($e->action, ['routed', 'forwarded', 'transmitted', 'distributed'], true) ? null : $e->remarks,
+                'remarks' => $public && in_array($e->action, ['routed', 'forwarded', 'transmitted', 'retransmitted', 'distributed'], true) ? null : $e->remarks,
                 'at' => $e->created_at?->toIso8601String(),
             ])->values()->all();
     }

@@ -130,8 +130,11 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
 
             <Alert v-if="m.status === 'Processing/Evaluating' && m.remarks" tone="warning" title="Returned by the PSED Chief">{{ m.remarks }}</Alert>
             <Alert v-else-if="m.status === 'Transmittal (For Compliance)' && m.remarks" tone="danger" title="For compliance">{{ m.remarks }}</Alert>
-            <Alert v-else-if="m.status === 'Reviewed' || m.status === 'For Compliance'" tone="warning" title="Print the transmittal">
-                The Chief decided ({{ m.status === 'Reviewed' ? 'approved' : 'for compliance' }}). The reviewed HR mechanism, the HR checklist and the transmittal are below. Print the transmittal, have the Regional Director sign it, then upload the signed copy to email the agency.
+            <Alert v-else-if="m.status === 'Reviewed'" tone="warning" title="Generate the transmittal">
+                The PSED Chief reviewed it and signed the HR checklist. The Action Officer chooses the transmittal: Approved, or For Compliance if the HR mechanism needs corrections. Then print it, have the Regional Director sign it, and upload the signed copy to email the agency.
+            </Alert>
+            <Alert v-else-if="m.status === 'For Compliance'" tone="warning" title="For Compliance: print the transmittal">
+                <template v-if="m.remarks">To correct: {{ m.remarks }}. </template>The For Compliance transmittal is made. Print it, have the Regional Director sign it, then upload the signed copy to email the agency.
             </Alert>
             <Alert v-else-if="m.status === 'Transmittal (Approved)'" tone="warning" title="Waiting for the signed copies">
                 The agency was emailed the documents and told to print three (3) copies for the signature of the Head of Agency. Give the final approval once they reach the Regional Office.

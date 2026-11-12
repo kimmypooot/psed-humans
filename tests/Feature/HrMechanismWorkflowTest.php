@@ -211,9 +211,11 @@ class HrMechanismWorkflowTest extends TestCase
         Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
 
         // The transmittal is the Action Officer's: the Chief cannot make it, and it cannot be sent before it exists.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertForbidden();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", ['type' => 'approval'] + $this->letter())->assertForbidden();
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 5)])->assertSessionHasErrors('reviewed');
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertSessionHasErrors('type');
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", ['type' => 'approval'] + $this->letter())->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status, 'Approved: the status stays Reviewed until it is sent');
         $this->assertSame(['checklist', 'reviewed', 'transmittal'], $mechanism->fresh()->currentAttachments()->pluck('kind')->sort()->values()->all());
         Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
 
@@ -275,7 +277,7 @@ class HrMechanismWorkflowTest extends TestCase
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/distribute")->assertForbidden();
     }
 
-    public function test_for_compliance_is_the_chiefs_decision_and_the_agency_answers_through_its_signed_link(): void
+    public function test_the_action_officer_chooses_for_compliance_and_the_agency_answers_through_its_signed_link(): void
     {
         Storage::fake('local');
         Notification::fake();
@@ -284,27 +286,38 @@ class HrMechanismWorkflowTest extends TestCase
         $mechanism = $this->submitted();
         $mechanism->update(['status' => MechanismStatus::Processing, 'action_officer_id' => $officer->id, 'acknowledged_at' => now(), 'due_at' => now()->addDays(20)]);
 
-        // The Action Officer only evaluates and forwards the reviewed mechanism and the checklist; they cannot send it back.
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'Not ready.'] + $this->letter())->assertForbidden();
+        // The Action Officer only evaluates and forwards; the Chief reviews. The Chief has no For Compliance of their own any more.
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/forward", $this->documents())->assertRedirect();
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'Not ready.'] + $this->letter())->assertForbidden();
-        $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'), 'no transmittal before the Chief decides');
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'Not ready.', 'signed_checklist' => $this->signedPdf($chief->name)])->assertNotFound();
+        $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'), 'no transmittal before the Chief reviews');
 
-        // The Chief decides.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => ''] + ['signed_checklist' => $this->signedPdf($chief->name)])->assertSessionHasErrors('remarks');
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status);
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.', 'signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
+        // The Action Officer chooses For Compliance when generating the transmittal, and says what the agency must correct.
+        $generate = fn (array $data) => $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $data + $this->letter());
+        $generate(['type' => 'compliance'])->assertSessionHasErrors(['remarks' => 'Say what the agency needs to correct.']);
+        $generate(['type' => 'other'])->assertSessionHasErrors('type');
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status, 'nothing happened');
+
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", ['type' => 'compliance', 'remarks' => 'The resolution is missing.'] + $this->letter())->assertForbidden();
+        $generate(['type' => 'compliance', 'remarks' => 'The resolution is missing.'])->assertRedirect()->assertSessionHasNoErrors();
 
         // Marked For Compliance, but the agency hears nothing until the Action Officer sends the signed transmittal.
         $mechanism->refresh();
         $this->assertSame(MechanismStatus::ForCompliance, $mechanism->status);
+        $this->assertSame('The resolution is missing.', $mechanism->remarks);
         Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
-        $this->get(URL::signedRoute('track.show', $mechanism))->assertInertia(fn ($page) => $page->where('resubmitUrl', null));
-
-        // The Action Officer handles the For Compliance transmittal the same way: generate it, then send the signed copy.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertForbidden();
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
+        $this->get(URL::signedRoute('track.show', $mechanism))->assertInertia(fn ($page) => $page->where('resubmitUrl', null)->where('mechanism.remarks', null));
         $this->assertSame('Transmittal_ForCompliance_'.$mechanism->tracking_code.'.docx', $mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal')->name);
+
+        // Before it is sent the officer may still change their mind: Approved again drops the corrections.
+        $generate(['type' => 'approval'])->assertRedirect();
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status);
+        $this->assertNull($mechanism->fresh()->remarks);
+        $this->assertSame('Transmittal_ForApproval_'.$mechanism->tracking_code.'.docx', $mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal')->name);
+        $generate(['type' => 'compliance', 'remarks' => 'The resolution is missing.'])->assertRedirect();
+        $this->assertSame(MechanismStatus::ForCompliance, $mechanism->fresh()->status);
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 5)])->assertRedirect();
 
         $mechanism->refresh();
@@ -313,6 +326,8 @@ class HrMechanismWorkflowTest extends TestCase
         Notification::assertSentOnDemand(MechanismStatusChanged::class, fn ($n) => $n->headline === 'For compliance' && count($n->attachments) === 3);
 
         // The agency, with no account, opens its link and uploads the corrected file.
+        $this->app['auth']->forgetGuards();
+        $this->flushSession();
         $this->get(URL::signedRoute('track.show', $mechanism))->assertOk()->assertInertia(fn ($page) => $page
             ->component('Public/Status')
             ->where('mechanism.status', 'Transmittal (For Compliance)')
@@ -326,20 +341,16 @@ class HrMechanismWorkflowTest extends TestCase
         $this->assertNull($mechanism->acknowledged_at);
     }
 
-    public function test_the_chief_may_also_send_it_back_for_compliance(): void
+    public function test_the_chief_only_approves_or_returns_it_to_the_officer(): void
     {
-        Storage::fake('local');
-        Notification::fake();
         $mechanism = $this->submitted();
-        $mechanism->update(['status' => MechanismStatus::ReviewedByChief]);
-        foreach (['reviewed', 'checklist'] as $kind) {
-            $mechanism->attachments()->create(['kind' => $kind, 'path' => "x/{$kind}.pdf", 'name' => "{$kind}.pdf"]);
-        }
-
+        $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'action_officer_id' => $this->person(UserRole::PsedStaff)->id]);
         $chief = $this->person(UserRole::PsedChief);
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'Needs the signed resolution.'] + $this->letter() + ['signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
 
-        $this->assertSame(MechanismStatus::ForCompliance, $mechanism->fresh()->status);
+        $can = $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}")->json('can');
+        $this->assertTrue($can['review']);
+        $this->assertTrue($can['returnToOfficer']);
+        $this->assertArrayNotHasKey('returnForCompliance', $can);
     }
 
     public function test_final_approval_comes_from_the_director_or_psed_only_after_the_chief(): void

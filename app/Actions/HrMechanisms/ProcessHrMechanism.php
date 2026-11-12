@@ -160,41 +160,10 @@ class ProcessHrMechanism
     }
 
     /**
-     * The Chief marks it For Compliance: the corrections are noted and the HR checklist they signed replaces the officer's.
-     * Nothing goes to the agency yet: the Action Officer generates the For Compliance transmittal, prints it for the
-     * Regional Director's signature, then transmits it.
-     *
-     * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
-     *
-     * @throws RuntimeException when a document is missing
-     */
-    public function returnForCompliance(HrMechanism $mechanism, User $by, string $remarks, UploadedFile $signedChecklist, array $signature): HrMechanism
-    {
-        $this->requireDocuments($mechanism);
-
-        $mechanism = DB::transaction(function () use ($mechanism, $by, $remarks, $signedChecklist, $signature) {
-            $this->replaceChecklist($mechanism, $by, $signedChecklist, $signature);
-            $from = $mechanism->status;
-            $mechanism->update([
-                'status' => MechanismStatus::ForCompliance,
-                'date_processed' => $mechanism->date_processed ?? now(),
-                'date_reviewed' => now(),
-                'remarks' => $remarks,
-            ]);
-            $mechanism->recordEvent('marked_for_compliance', $by, $from, MechanismStatus::ForCompliance, $remarks);
-
-            return $mechanism;
-        });
-
-        StaffNotices::readyToTransmit($mechanism, $by, forCompliance: true);
-
-        return $mechanism;
-    }
-
-    /**
-     * The PSED Chief approves: the HR checklist they signed replaces the officer's. The status is Reviewed. The agency is not
-     * emailed yet: the Action Officer generates the For Approval transmittal, prints it for the Regional Director's
-     * signature, then transmits it.
+     * The PSED Chief reviews what the Action Officer forwarded and agrees with it: the HR checklist they signed replaces the
+     * officer's. The status is Reviewed. The Chief does not decide the outcome for the agency: the Action Officer chooses it
+     * when generating the transmittal (Approved, or For Compliance), prints it for the Regional Director's signature, then
+     * transmits it. The agency is not emailed yet.
      *
      * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
      */
@@ -211,24 +180,31 @@ class ProcessHrMechanism
             return $mechanism;
         });
 
-        StaffNotices::readyToTransmit($mechanism, $by, forCompliance: false);
+        StaffNotices::readyToTransmit($mechanism, $by);
 
         return $mechanism;
     }
 
     /**
-     * The Action Officer makes the transmittal letter for the Chief's decision (For Approval, or For Compliance when the Chief
-     * marked it so) from what they filled in. It can be made again until it is sent; the latest one is the one to print.
+     * The Action Officer chooses what the transmittal says, now that the Chief reviewed it: Approved (`approval`: the status stays
+     * Reviewed) or For Compliance (`compliance`: the status becomes For Compliance and `$corrections` says what the agency must
+     * correct). The letter is made from what they filled in. It can be made again, even with the other type, until it is sent;
+     * the latest one is the one to print.
      *
      * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
      */
-    public function generateTransmittal(HrMechanism $mechanism, User $by, array $transmittal): HrMechanism
+    public function generateTransmittal(HrMechanism $mechanism, User $by, string $type, ?string $corrections, array $transmittal): HrMechanism
     {
-        $type = Transmittal::typeFor($mechanism);
+        $compliance = $type === 'compliance';
+        $to = $compliance ? MechanismStatus::ForCompliance : MechanismStatus::Reviewed;
 
-        DB::transaction(function () use ($mechanism, $by, $type, $transmittal) {
+        DB::transaction(function () use ($mechanism, $by, $type, $corrections, $transmittal, $compliance, $to) {
+            $from = $mechanism->status;
             $this->writeTransmittal($mechanism, $by, $type, $transmittal);
-            $mechanism->recordEvent('transmittal_generated', $by, $mechanism->status, $mechanism->status, 'The '.Transmittal::TYPES[$type].' transmittal was generated.');
+
+            // Choosing For Compliance records what needs correcting; choosing Approved again drops it.
+            $mechanism->update(['status' => $to] + ($compliance ? ['remarks' => $corrections, 'date_processed' => $mechanism->date_processed ?? now()] : ($from === MechanismStatus::ForCompliance ? ['remarks' => null] : [])));
+            $mechanism->recordEvent('transmittal_generated', $by, $from, $to, 'The '.Transmittal::TYPES[$type].' transmittal was generated.'.($compliance ? ' To correct: '.$corrections : ''));
         });
 
         return $mechanism;
@@ -267,28 +243,68 @@ class ProcessHrMechanism
             return $mechanism;
         });
 
+        $this->emailTransmittal($mechanism, $forCompliance);
+
+        return $mechanism;
+    }
+
+    /**
+     * Something in what the agency was sent was wrong (the wrong signed transmittal, or the wrong reviewed HR mechanism). The
+     * Action Officer uploads the corrected signed transmittal, and the reviewed HR mechanism if it changed, with the reason, and
+     * the agency is emailed again with the current documents and told to use these instead of the earlier ones. The status
+     * does not change. The earlier files are kept, and the reason is kept in the history (the agency is not shown it).
+     *
+     * @throws RuntimeException when a document is missing
+     */
+    public function correct(HrMechanism $mechanism, User $by, UploadedFile $signedTransmittal, ?UploadedFile $reviewed, string $reason): HrMechanism
+    {
+        $this->requireDocuments($mechanism);
+        $forCompliance = $mechanism->status === MechanismStatus::TransmittalCompliance;
+
+        DB::transaction(function () use ($mechanism, $by, $signedTransmittal, $reviewed, $reason) {
+            $mechanism->attachments()->create([
+                'kind' => 'transmittal',
+                'path' => $signedTransmittal->store('hr-mechanisms/'.$mechanism->agency_id.'/'.$mechanism->id, 'local'),
+                'name' => $signedTransmittal->getClientOriginalName(),
+                'uploaded_by' => $by->id,
+            ]);
+            $this->attach($mechanism, $by, ['reviewed' => $reviewed]);
+
+            $mechanism->update(['date_transmitted' => now()]);
+            $mechanism->recordEvent('retransmitted', $by, $mechanism->status, $mechanism->status, $reason);
+        });
+
+        $this->emailTransmittal($mechanism, $forCompliance, corrected: true);
+
+        return $mechanism;
+    }
+
+    /** Emails the agency what the Chief decided, with the three documents. */
+    private function emailTransmittal(HrMechanism $mechanism, bool $forCompliance, bool $corrected = false): void
+    {
+        $replaces = $corrected ? ['These documents replace the ones PSED sent you earlier. Please use these and disregard the earlier ones.'] : [];
+
         if ($forCompliance) {
             $this->tell(
                 $mechanism,
-                'For compliance',
+                $corrected ? 'For compliance (corrected documents)' : 'For compliance',
                 'Your HR mechanism needs corrections before PSED can approve it.',
-                [(string) $mechanism->remarks, 'The signed transmittal, the reviewed HR mechanism and the HR checklist are attached. Correct the HR mechanism and upload it again from your tracking page.'],
+                [...$replaces, (string) $mechanism->remarks, 'The signed transmittal, the reviewed HR mechanism and the HR checklist are attached. Correct the HR mechanism and upload it again from your tracking page.'],
                 true,
             );
         } else {
             $this->tell(
                 $mechanism,
-                'Your HR mechanism was reviewed',
+                $corrected ? 'Your HR mechanism was reviewed (corrected documents)' : 'Your HR mechanism was reviewed',
                 'Your HR mechanism was reviewed and approved by the PSED Chief.',
                 [
+                    ...$replaces,
                     'Print three (3) copies of the HR Mechanism for the signature of the Head of Agency, then submit the signed copies to the CSC Regional Office VIII for final approval.',
                     'The reviewed HR mechanism, the signed transmittal and the HR checklist are attached.',
                 ],
                 true,
             );
         }
-
-        return $mechanism;
     }
 
     /** The signed copies reached the Regional Office and the Director IV (or PSED for them) approves. */

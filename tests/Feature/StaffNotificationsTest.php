@@ -102,7 +102,7 @@ class StaffNotificationsTest extends TestCase
         $director = $this->person(UserRole::Director);
         $mechanism = $this->mechanism(MechanismStatus::ReviewedByChief, $officer);
 
-        StaffNotices::readyToTransmit($mechanism, $chief, forCompliance: false);
+        StaffNotices::readyToTransmit($mechanism, $chief);
         StaffNotices::returnedToOfficer($mechanism, $chief, 'The resolution is missing.');
         $this->assertEqualsCanonicalizing(['reviewed', 'returned_to_officer'], $this->kinds($officer));
         $this->assertSame([], $this->kinds($chief));

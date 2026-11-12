@@ -186,10 +186,9 @@ class UndoTest extends TestCase
         $this->assertNotNull($m->attachments()->where('name', 'checklist (signed).pdf')->first()->reverted_at);
         Notification::assertSentTo($this->officer, \App\Notifications\MechanismActivity::class, fn ($n) => ($n->toArray($this->officer)['kind'] ?? null) === 'undone');
 
-        // The Chief decides again, this time For Compliance, and undoes that too.
-        $this->send($this->chief, 'compliance', ['remarks' => 'The resolution is missing.', 'signed_checklist' => $this->signedPdf('BANELLO PABUA GABON', name: 'second (signed).pdf')])->assertRedirect()->assertSessionHasNoErrors();
-        $this->assertSame(MechanismStatus::ForCompliance, $this->current());
-        $this->assertSame('Undo For Compliance', $this->can($this->chief)['undo_label']);
+        // The Chief approves again with a note, and undoes that too.
+        $this->send($this->chief, 'chief-approve', ['note' => 'Second look.', 'signed_checklist' => $this->signedPdf('BANELLO PABUA GABON', name: 'second (signed).pdf')])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertSame('second (signed).pdf', $this->mechanism->fresh()->currentAttachments()->firstWhere('kind', 'checklist')->name);
         $this->undo($this->chief)->assertRedirect();
         $this->assertSame(MechanismStatus::ReviewedByChief, $this->current());
         $this->assertNull($this->mechanism->fresh()->remarks);
@@ -207,7 +206,7 @@ class UndoTest extends TestCase
             'date' => '2027-03-09', 'addressee_name' => 'HON. JUAN D. DELA CRUZ', 'addressee_position' => 'Municipal Mayor',
             'addressee_address' => "Municipal Government\nProvince of Leyte", 'salutation' => 'Mayor Dela Cruz', 'subject' => '2027 MSP', 'signatory_id' => 66,
         ]];
-        $this->send($this->officer, 'generate-transmittal', $letter)->assertRedirect()->assertSessionHasNoErrors();
+        $this->send($this->officer, 'generate-transmittal', ['type' => 'approval'] + $letter)->assertRedirect()->assertSessionHasNoErrors();
 
         $this->assertFalse($this->can($this->chief)['can']['undo'], 'the officer generated the transmittal');
         $this->undo($this->chief)->assertForbidden();

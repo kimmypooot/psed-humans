@@ -20,6 +20,7 @@ const dot = {
     email_failed: 'bg-danger',
     reviewed: 'bg-warning',
     undone: 'bg-warning',
+    retransmitted: 'bg-warning',
     approved: 'bg-success',
 };
 
