@@ -109,9 +109,20 @@ class HrMechanism extends Model
     }
 
     /**
+     * Whether the Action Officer generated the transmittal for the Chief's decision. A transmittal from an earlier round
+     * (before the Chief decided again) does not count.
+     */
+    public function hasGeneratedTransmittal(): bool
+    {
+        return $this->attachments()->where('kind', 'transmittal')
+            ->when($this->date_reviewed, fn ($q) => $q->where('created_at', '>=', $this->date_reviewed))
+            ->exists();
+    }
+
+    /**
      * Whether the two documents the Action Officer attaches are there: the reviewed HR mechanism and the
-     * HR checklist. The transmittal is not one of them; it is generated when the Chief approves or it is
-     * sent back for compliance.
+     * HR checklist. The transmittal is not one of them; the Action Officer generates it after the Chief
+     * approves or marks it For Compliance.
      */
     public function hasReviewDocuments(): bool
     {

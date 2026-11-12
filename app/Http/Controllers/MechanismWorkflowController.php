@@ -67,21 +67,19 @@ class MechanismWorkflowController extends Controller
     }
 
     /**
-     * For Compliance: the Chief's decision after reviewing. Nothing is uploaded: the reviewed HR mechanism and the
-     * HR checklist are the ones the Action Officer forwarded. The For Compliance transmittal is made from what the
-     * Chief filled in, and the agency gets it by email with those two documents.
+     * For Compliance: the Chief's decision after reviewing. The Chief uploads the HR checklist signed with their PNPKI
+     * certificate, which replaces the officer's. The Action Officer then generates the For Compliance transmittal.
      */
     public function returnForCompliance(Request $request, HrMechanism $mechanism): RedirectResponse
     {
         $this->authorize('returnForCompliance', $mechanism);
 
-        $data = $request->validate(['remarks' => ['required', 'string', 'min:5', 'max:2000'], 'transmittal' => ['required', 'array']] + Transmittal::rules('transmittal.'));
-        $letter = $this->letter($data['transmittal']);
+        $data = $request->validate(['remarks' => ['required', 'string', 'min:5', 'max:2000']]);
         [$signed, $signature] = $this->signedChecklist($request);
-        $this->guard(fn () => $this->process->returnForCompliance($mechanism, $request->user(), $data['remarks'], $letter, $signed, $signature));
+        $this->guard(fn () => $this->process->returnForCompliance($mechanism, $request->user(), $data['remarks'], $signed, $signature));
         AuditLog::record('mechanism.returned', $mechanism, after: ['remarks' => $data['remarks']]);
 
-        return back()->with('status', 'Marked For Compliance. The Action Officer will print the transmittal for the Regional Director\'s signature and send it to the agency.');
+        return back()->with('status', 'Marked For Compliance. The Action Officer will generate the transmittal, have the Regional Director sign it, and send it to the agency.');
     }
 
     /** Not approved: the Chief sends it back to the Action Officer to evaluate again. */
@@ -94,6 +92,18 @@ class MechanismWorkflowController extends Controller
         AuditLog::record('mechanism.returned_to_officer', $mechanism, after: ['remarks' => $data['remarks']]);
 
         return back()->with('status', 'Returned to the Action Officer for re-evaluation.');
+    }
+
+    /** The Action Officer makes the transmittal letter after the Chief's decision, so it can be printed for the Regional Director's signature. */
+    public function generateTransmittal(Request $request, HrMechanism $mechanism): RedirectResponse
+    {
+        $this->authorize('generateTransmittal', $mechanism);
+
+        $data = $request->validate(['transmittal' => ['required', 'array']] + Transmittal::rules('transmittal.'));
+        $this->process->generateTransmittal($mechanism, $request->user(), $this->letter($data['transmittal']));
+        AuditLog::record('mechanism.transmittal_generated', $mechanism);
+
+        return back()->with('status', 'The transmittal was generated. Open it under Documents, print it for the Regional Director\'s signature, then upload the signed copy to email the agency.');
     }
 
     /**
@@ -130,18 +140,17 @@ class MechanismWorkflowController extends Controller
         return back()->with('status', 'Recorded: one copy to the Field Office, one to the agency, and one kept in the records of PSED.');
     }
 
-    /** The Chief's decision when it is for approval: the For Approval transmittal is made and the Action Officer prints it. The agency is not emailed yet. */
+    /** The Chief's decision when it is for approval, with the signed HR checklist. The Action Officer generates the transmittal next. The agency is not emailed yet. */
     public function chiefApprove(Request $request, HrMechanism $mechanism): RedirectResponse
     {
         $this->authorize('review', $mechanism);
 
-        $data = $request->validate(['note' => ['nullable', 'string', 'max:2000'], 'transmittal' => ['required', 'array']] + Transmittal::rules('transmittal.'));
-        $letter = $this->letter($data['transmittal']);
+        $data = $request->validate(['note' => ['nullable', 'string', 'max:2000']]);
         [$signed, $signature] = $this->signedChecklist($request);
-        $this->guard(fn () => $this->process->chiefApprove($mechanism, $request->user(), $data['note'] ?? null, $letter, $signed, $signature));
+        $this->guard(fn () => $this->process->chiefApprove($mechanism, $request->user(), $data['note'] ?? null, $signed, $signature));
         AuditLog::record('mechanism.reviewed', $mechanism);
 
-        return back()->with('status', 'Reviewed. The Action Officer will print the transmittal for the Regional Director\'s signature and send it to the agency.');
+        return back()->with('status', 'Reviewed. The Action Officer will generate the transmittal, have the Regional Director sign it, and send it to the agency.');
     }
 
     /** The signed copies are in: the Director IV (or PSED for them) gives the final approval. */

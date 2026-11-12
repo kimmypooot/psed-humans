@@ -13,15 +13,23 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * The transmittal letter, before it is sent: what the form starts with, and a draft to read.
- * The letter that goes to the agency is made when the Chief approves or it is marked For Compliance
- * (MechanismWorkflowController); the person who may take that step may see its draft.
+ * The Action Officer generates the letter after the Chief approves or marks it For Compliance
+ * (MechanismWorkflowController::generateTransmittal); only they may see its draft. The Chief may list the
+ * documents the officer forwarded (`documents=1`) while deciding.
  */
 class TransmittalController extends Controller
 {
     /** The form's starting values and the two people who may sign. */
     public function show(Request $request, HrMechanism $mechanism, string $type): JsonResponse
     {
-        $this->authorizeFor($mechanism, $type);
+        $documentsOnly = $request->boolean('documents');
+        $this->authorizeFor($mechanism, $type, $documentsOnly);
+
+        $documents = collect(MechanismPresenter::attachments($mechanism, $request->user()))->whereIn('kind', HrMechanismAttachment::UPLOADED)->values()->all();
+
+        if ($documentsOnly) {
+            return response()->json(['documents' => $documents]);
+        }
 
         $signatories = collect(ImisDirectory::signatories());
         // The letter in the template is signed by the Director III; the Director IV is the other choice.
@@ -29,8 +37,7 @@ class TransmittalController extends Controller
 
         return response()->json([
             'defaults' => Transmittal::defaults($mechanism->loadMissing('agency')) + ['signatory_id' => $default ? (string) $default['id'] : ''],
-            // What the Action Officer forwarded, for the Chief to open before deciding.
-            'documents' => collect(MechanismPresenter::attachments($mechanism, $request->user()))->whereIn('kind', HrMechanismAttachment::UPLOADED)->values()->all(),
+            'documents' => $documents,
             'signatories' => $signatories->map(fn ($s) => ['value' => (string) $s['id'], 'label' => $s['label'].' — '.$s['position']])->values()->all(),
         ]);
     }
@@ -83,10 +90,18 @@ class TransmittalController extends Controller
         return $fields + ['signatory_name' => $signatory['printed'], 'signatory_position' => $signatory['position']];
     }
 
-    /** Whoever may approve (the Chief) may draft the For Approval letter; whoever may send it back may draft the For Compliance one. */
-    private function authorizeFor(HrMechanism $mechanism, string $type): void
+    /** The Action Officer drafts the letter the Chief's decision calls for. The Chief may only list the documents. */
+    private function authorizeFor(HrMechanism $mechanism, string $type, bool $documentsOnly = false): void
     {
         abort_unless(isset(Transmittal::TYPES[$type]), 404);
-        $this->authorize($type === 'approval' ? 'review' : 'returnForCompliance', $mechanism);
+
+        if ($documentsOnly) {
+            $this->authorize($type === 'approval' ? 'review' : 'returnForCompliance', $mechanism);
+
+            return;
+        }
+
+        $this->authorize('generateTransmittal', $mechanism);
+        abort_unless(Transmittal::typeFor($mechanism) === $type, 404);
     }
 }

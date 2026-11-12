@@ -60,8 +60,8 @@ class StaffNotices
             self::users([$m->action_officer_id], except: $by),
             $m,
             $forCompliance ? 'marked_for_compliance' : 'reviewed',
-            $forCompliance ? 'For Compliance: print the transmittal' : 'Reviewed: print the transmittal',
-            self::what($m).' was '.$what.'. Print the transmittal for the Regional Director\'s signature, then record it in the system to email the agency.',
+            $forCompliance ? 'For Compliance: generate the transmittal' : 'Reviewed: generate the transmittal',
+            self::what($m).' was '.$what.'. Generate the transmittal, print it for the Regional Director\'s signature, then record it in the system to email the agency.',
         );
     }
 

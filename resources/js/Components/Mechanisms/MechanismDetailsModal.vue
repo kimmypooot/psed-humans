@@ -101,7 +101,7 @@ const dates = computed(() => (m.value?.dates ?? []).filter((d) => d.value));
 
 // The documents PSED sends back. An imported (legacy) record has none of its own, but once it is worked in
 // the system (routed, forwarded to the Chief) its documents must show like any other.
-const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.attachments.some((a) => a.name) || m.value.can.acknowledge || m.value.can.work || m.value.can.review || m.value.can.transmit));
+const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.attachments.some((a) => a.name) || m.value.can.acknowledge || m.value.can.work || m.value.can.review || m.value.can.generateTransmittal || m.value.can.transmit));
 </script>
 
 <template>

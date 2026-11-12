@@ -65,7 +65,7 @@ class SignedChecklistTest extends TestCase
 
     private function approve(HrMechanism $mechanism, ?UploadedFile $signed)
     {
-        return $this->actingAs($this->chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->letter() + ($signed ? ['signed_checklist' => $signed] : []));
+        return $this->actingAs($this->chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $signed ? ['signed_checklist' => $signed] : []);
     }
 
     private function refused(HrMechanism $mechanism): void
@@ -148,6 +148,7 @@ class SignedChecklistTest extends TestCase
         // Only when the Action Officer sends the signed transmittal does the agency get the signed checklist.
         $officer = User::factory()->role(UserRole::PsedStaff)->create();
         $mechanism->update(['action_officer_id' => $officer->id]);
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 20)])->assertRedirect();
         $this->assertSame(MechanismStatus::TransmittalApproved, $mechanism->fresh()->status);
 
@@ -159,7 +160,7 @@ class SignedChecklistTest extends TestCase
     public function test_the_same_applies_when_the_chief_sends_it_back_for_compliance(): void
     {
         $mechanism = $this->forReview();
-        $post = fn (?UploadedFile $signed) => $this->actingAs($this->chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.'] + $this->letter() + ($signed ? ['signed_checklist' => $signed] : []));
+        $post = fn (?UploadedFile $signed) => $this->actingAs($this->chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.'] + ($signed ? ['signed_checklist' => $signed] : []));
 
         $post(null)->assertSessionHasErrors('signed_checklist');
         $post($this->signedPdf('SOMEONE ELSE ENTIRELY'))->assertSessionHasErrors('signed_checklist');

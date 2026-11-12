@@ -82,6 +82,12 @@ class Transmittal
         ];
     }
 
+    /** Which letter the Chief's decision calls for: For Compliance when it was marked so, otherwise For Approval. */
+    public static function typeFor(HrMechanism $mechanism): string
+    {
+        return $mechanism->status === \App\Enums\MechanismStatus::ForCompliance ? 'compliance' : 'approval';
+    }
+
     /** The finished letter as the bytes of a .docx. */
     public static function render(HrMechanism $mechanism, string $type, array $data): string
     {

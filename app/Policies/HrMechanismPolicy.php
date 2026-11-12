@@ -51,9 +51,15 @@ class HrMechanismPolicy
         return $this->review($user, $mechanism) && $mechanism->action_officer_id !== null;
     }
 
+    /** After the Chief decides, the Action Officer generates the transmittal letter. */
+    public function generateTransmittal(User $user, HrMechanism $mechanism): bool
+    {
+        return $this->transmit($user, $mechanism);
+    }
+
     /**
-     * After the Chief decides, the Action Officer prints the transmittal, has the Regional Director sign it, and
-     * records that here. That is when the agency is emailed.
+     * The Action Officer prints the generated transmittal, has the Regional Director sign it, and records that here.
+     * That is when the agency is emailed.
      */
     public function transmit(User $user, HrMechanism $mechanism): bool
     {

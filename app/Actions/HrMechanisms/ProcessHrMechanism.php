@@ -24,8 +24,9 @@ use Throwable;
  * What PSED does with a submission, in the order the PSED Chief approved:
  *  route (PSED staff; the 20-day clock starts) -> acknowledge (Action Officer) -> attach the reviewed
  *  mechanism and the checklist and forward (Action Officer) -> review (PSED Chief: approve, mark For
- *  Compliance, or send back to the officer) -> transmit (Action Officer, once the Regional Director signed
- *  the printed transmittal; this is when the agency is emailed) -> final approval once the Head of
+ *  Compliance, or send back to the officer; the Chief signs the checklist) -> generate the transmittal
+ *  (Action Officer) -> transmit (Action Officer, once the Regional Director signed the printed
+ *  transmittal; this is when the agency is emailed) -> final approval once the Head of
  *  Agency's signed copies are in -> distribute the approved copies.
  */
 class ProcessHrMechanism
@@ -158,22 +159,20 @@ class ProcessHrMechanism
     }
 
     /**
-     * The Chief marks it For Compliance: the corrections are noted, the HR checklist they signed replaces the officer's, and
-     * the For Compliance transmittal is made. Nothing goes to the agency yet: the Action Officer prints the transmittal for
-     * the Regional Director's signature, then transmits it.
+     * The Chief marks it For Compliance: the corrections are noted and the HR checklist they signed replaces the officer's.
+     * Nothing goes to the agency yet: the Action Officer generates the For Compliance transmittal, prints it for the
+     * Regional Director's signature, then transmits it.
      *
-     * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
      * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
      *
      * @throws RuntimeException when a document is missing
      */
-    public function returnForCompliance(HrMechanism $mechanism, User $by, string $remarks, array $transmittal, UploadedFile $signedChecklist, array $signature): HrMechanism
+    public function returnForCompliance(HrMechanism $mechanism, User $by, string $remarks, UploadedFile $signedChecklist, array $signature): HrMechanism
     {
         $this->requireDocuments($mechanism);
 
-        $mechanism = DB::transaction(function () use ($mechanism, $by, $remarks, $transmittal, $signedChecklist, $signature) {
+        $mechanism = DB::transaction(function () use ($mechanism, $by, $remarks, $signedChecklist, $signature) {
             $this->replaceChecklist($mechanism, $by, $signedChecklist, $signature);
-            $this->writeTransmittal($mechanism, $by, 'compliance', $transmittal);
             $from = $mechanism->status;
             $mechanism->update([
                 'status' => MechanismStatus::ForCompliance,
@@ -192,20 +191,18 @@ class ProcessHrMechanism
     }
 
     /**
-     * The PSED Chief approves: the HR checklist they signed replaces the officer's and the For Approval transmittal is made.
-     * The status is Reviewed. The agency is not emailed yet: the Action Officer prints the transmittal for the Regional
-     * Director's signature, then transmits it.
+     * The PSED Chief approves: the HR checklist they signed replaces the officer's. The status is Reviewed. The agency is not
+     * emailed yet: the Action Officer generates the For Approval transmittal, prints it for the Regional Director's
+     * signature, then transmits it.
      *
-     * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
      * @param  array<string, mixed>  $signature  what PdfSignature found in the signed checklist
      */
-    public function chiefApprove(HrMechanism $mechanism, User $by, ?string $note, array $transmittal, UploadedFile $signedChecklist, array $signature): HrMechanism
+    public function chiefApprove(HrMechanism $mechanism, User $by, ?string $note, UploadedFile $signedChecklist, array $signature): HrMechanism
     {
         $this->requireDocuments($mechanism);
 
-        $mechanism = DB::transaction(function () use ($mechanism, $by, $note, $transmittal, $signedChecklist, $signature) {
+        $mechanism = DB::transaction(function () use ($mechanism, $by, $note, $signedChecklist, $signature) {
             $this->replaceChecklist($mechanism, $by, $signedChecklist, $signature);
-            $this->writeTransmittal($mechanism, $by, 'approval', $transmittal);
             $from = $mechanism->status;
             $mechanism->update(['status' => MechanismStatus::Reviewed, 'date_reviewed' => now(), 'remarks' => $note]);
             $mechanism->recordEvent('reviewed', $by, $from, MechanismStatus::Reviewed, $note);
@@ -219,15 +216,37 @@ class ProcessHrMechanism
     }
 
     /**
+     * The Action Officer makes the transmittal letter for the Chief's decision (For Approval, or For Compliance when the Chief
+     * marked it so) from what they filled in. It can be made again until it is sent; the latest one is the one to print.
+     *
+     * @param  array<string, mixed>  $transmittal  what the letter says; see Transmittal::rules
+     */
+    public function generateTransmittal(HrMechanism $mechanism, User $by, array $transmittal): HrMechanism
+    {
+        $type = Transmittal::typeFor($mechanism);
+
+        DB::transaction(function () use ($mechanism, $by, $type, $transmittal) {
+            $this->writeTransmittal($mechanism, $by, $type, $transmittal);
+            $mechanism->recordEvent('transmittal_generated', $by, $mechanism->status, $mechanism->status, 'The '.Transmittal::TYPES[$type].' transmittal was generated.');
+        });
+
+        return $mechanism;
+    }
+
+    /**
      * The Regional Director signed the printed transmittal. The Action Officer records it with the signed copy: the status
      * becomes Transmittal (Approved) or Transmittal (For Compliance), and the agency is emailed the reviewed HR mechanism,
      * the signed transmittal and the HR checklist.
      *
-     * @throws RuntimeException when a document is missing
+     * @throws RuntimeException when a document is missing or the transmittal was not generated
      */
     public function transmit(HrMechanism $mechanism, User $by, UploadedFile $signedTransmittal, ?string $note): HrMechanism
     {
         $this->requireDocuments($mechanism);
+
+        if (! $mechanism->hasGeneratedTransmittal()) {
+            throw new RuntimeException('Generate the transmittal first, then print it for the Regional Director\'s signature.');
+        }
 
         $forCompliance = $mechanism->status === MechanismStatus::ForCompliance;
         $to = $forCompliance ? MechanismStatus::TransmittalCompliance : MechanismStatus::TransmittalApproved;

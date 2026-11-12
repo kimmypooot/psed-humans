@@ -190,7 +190,7 @@ class HrMechanismWorkflowTest extends TestCase
         $this->assertSame(['checklist', 'reviewed'], $mechanism->currentAttachments()->pluck('kind')->sort()->values()->all());
     }
 
-    public function test_the_chief_approval_makes_the_transmittal_and_emails_the_agency_the_three_documents_and_the_print_instruction(): void
+    public function test_the_chief_approves_then_the_action_officer_generates_and_transmits_the_letter_that_emails_the_agency_the_three_documents(): void
     {
         Storage::fake('local');
         Notification::fake();
@@ -199,16 +199,22 @@ class HrMechanismWorkflowTest extends TestCase
         $mechanism->update(['status' => MechanismStatus::Processing, 'action_officer_id' => $officer->id]);
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/forward", $this->documents());
 
-        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->letter())->assertForbidden();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/chief-approve")->assertForbidden();
 
         $chief = $this->person(UserRole::PsedChief);
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve")->assertSessionHasErrors(['transmittal']);
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->letter() + ['signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve")->assertSessionHasErrors(['signed_checklist']);
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", ['signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
 
-        // The Chief's approval makes the transmittal but does not email the agency.
+        // The Chief's approval only signs the checklist: it does not make the transmittal and does not email the agency.
         $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status);
+        $this->assertSame(['checklist', 'reviewed'], $mechanism->fresh()->currentAttachments()->pluck('kind')->sort()->values()->all());
+        Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
+
+        // The transmittal is the Action Officer's: the Chief cannot make it, and it cannot be sent before it exists.
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertForbidden();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 5)])->assertSessionHasErrors('reviewed');
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
         $this->assertSame(['checklist', 'reviewed', 'transmittal'], $mechanism->fresh()->currentAttachments()->pluck('kind')->sort()->values()->all());
-        Notification::assertNothingSentTo(new \Illuminate\Notifications\AnonymousNotifiable);
         Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
 
         // Only the Action Officer it is with transmits it, with the transmittal the Regional Director signed.
@@ -280,9 +286,9 @@ class HrMechanismWorkflowTest extends TestCase
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'), 'no transmittal before the Chief decides');
 
         // The Chief decides.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => ''] + $this->letter() + ['signed_checklist' => $this->signedPdf($chief->name)])->assertSessionHasErrors('remarks');
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => ''] + ['signed_checklist' => $this->signedPdf($chief->name)])->assertSessionHasErrors('remarks');
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.'] + $this->letter() + ['signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", ['remarks' => 'The resolution is missing.', 'signed_checklist' => $this->signedPdf($chief->name)])->assertRedirect();
 
         // Marked For Compliance, but the agency hears nothing until the Action Officer sends the signed transmittal.
         $mechanism->refresh();
@@ -290,6 +296,10 @@ class HrMechanismWorkflowTest extends TestCase
         Notification::assertSentOnDemandTimes(MechanismStatusChanged::class, 0);
         $this->get(URL::signedRoute('track.show', $mechanism))->assertInertia(fn ($page) => $page->where('resubmitUrl', null));
 
+        // The Action Officer handles the For Compliance transmittal the same way: generate it, then send the signed copy.
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertForbidden();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", $this->letter())->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertSame('Transmittal_ForCompliance_'.$mechanism->tracking_code.'.docx', $mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal')->name);
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => UploadedFile::fake()->create('signed.pdf', 5)])->assertRedirect();
 
         $mechanism->refresh();

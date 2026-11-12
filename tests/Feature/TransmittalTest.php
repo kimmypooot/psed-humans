@@ -65,6 +65,25 @@ class TransmittalTest extends TestCase
         return $mechanism;
     }
 
+    /** The Chief decided and the mechanism is with its Action Officer: Reviewed, or For Compliance. */
+    private function decided(HrMechanism $mechanism, bool $forCompliance = false): User
+    {
+        $officer = User::factory()->role(UserRole::PsedStaff)->create();
+        $mechanism->update([
+            'status' => $forCompliance ? MechanismStatus::ForCompliance : MechanismStatus::Reviewed,
+            'action_officer_id' => $officer->id,
+            'date_reviewed' => now()->subMinute(),
+            'remarks' => $forCompliance ? 'The resolution is missing.' : null,
+        ]);
+
+        return $officer;
+    }
+
+    private function generate(User $officer, HrMechanism $mechanism, array $fields = [])
+    {
+        return $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/generate-transmittal", ['transmittal' => $fields ?: $this->fields()]);
+    }
+
     /** The text of the word/document.xml of the stored transmittal. */
     private function letterText(HrMechanism $mechanism): string
     {
@@ -81,7 +100,7 @@ class TransmittalTest extends TestCase
         return html_entity_decode(strip_tags(preg_replace('#</w:p>#', "\n", $xml)), ENT_QUOTES | ENT_XML1);
     }
 
-    public function test_approving_writes_the_for_approval_letter_signed_by_the_director_chosen(): void
+    public function test_the_action_officer_generates_the_for_approval_letter_signed_by_the_director_chosen(): void
     {
         Storage::fake('local');
         Notification::fake();
@@ -89,8 +108,12 @@ class TransmittalTest extends TestCase
         $mechanism = $this->forReview();
 
         $chief = User::factory()->role(UserRole::PsedChief)->create();
-        $this->actingAs($chief)
-            ->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 50])]))->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, []))->assertRedirect();
+        $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'), 'the Chief does not make the letter');
+
+        $officer = $this->decided($mechanism);
+        $this->generate($officer, $mechanism, $this->fields(['signatory_id' => 50]))->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('hr_mechanism_events', ['hr_mechanism_id' => $mechanism->id, 'action' => 'transmittal_generated', 'user_id' => $officer->id]);
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('9 March 2027', $text);
@@ -107,7 +130,7 @@ class TransmittalTest extends TestCase
         $this->assertSame('Transmittal_ForApproval_'.$mechanism->tracking_code.'.docx', $mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal')->name);
     }
 
-    public function test_sending_back_writes_the_for_compliance_letter(): void
+    public function test_the_action_officer_generates_the_for_compliance_letter_after_the_chief_marks_it(): void
     {
         Storage::fake('local');
         Notification::fake();
@@ -115,8 +138,11 @@ class TransmittalTest extends TestCase
         $mechanism = $this->forReview();
 
         $chief = User::factory()->role(UserRole::PsedChief)->create();
-        $this->actingAs($chief)
-            ->post("/mechanisms/{$mechanism->id}/compliance", $this->decision($chief, ['remarks' => 'The resolution is missing.', 'transmittal' => $this->fields()]))->assertRedirect();
+        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/compliance", $this->decision($chief, ['remarks' => 'The resolution is missing.']))->assertRedirect();
+        $this->assertSame(MechanismStatus::ForCompliance, $mechanism->fresh()->status);
+
+        $officer = $this->decided($mechanism, forCompliance: true);
+        $this->generate($officer, $mechanism)->assertRedirect()->assertSessionHasNoErrors();
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('submitted to this office for further evaluation', $text);
@@ -133,13 +159,13 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
-        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $officer = $this->decided($mechanism);
 
         // 12 is an employee, not the Director IV or the Director III.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 12])]))->assertSessionHasErrors('transmittal.signatory_id');
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['addressee_name' => '', 'subject' => ''])]))->assertSessionHasErrors(['transmittal.addressee_name', 'transmittal.subject']);
+        $this->generate($officer, $mechanism, $this->fields(['signatory_id' => 12]))->assertSessionHasErrors('transmittal.signatory_id');
+        $this->generate($officer, $mechanism, $this->fields(['addressee_name' => '', 'subject' => '']))->assertSessionHasErrors(['transmittal.addressee_name', 'transmittal.subject']);
 
-        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status, 'nothing happened');
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status, 'nothing happened');
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
     }
 
@@ -149,9 +175,9 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
-        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $officer = $this->decided($mechanism);
 
-        $first = $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertOk();
+        $first = $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertOk();
         $first->assertJsonPath('defaults.addressee_name', 'HON. ')
             ->assertJsonPath('defaults.addressee_position', 'Municipal Mayor')
             ->assertJsonPath('defaults.addressee_address', "Municipal Government of Javier\nProvince of Leyte")
@@ -160,10 +186,11 @@ class TransmittalTest extends TestCase
             ->assertJsonPath('signatories.1.label', 'Crucio, Gina A. — Director III')
             ->assertJsonCount(2, 'signatories');
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields()]))->assertRedirect();
+        $this->generate($officer, $mechanism)->assertRedirect();
 
-        $again = HrMechanism::factory()->for($mechanism->agency)->create(['status' => MechanismStatus::ReviewedByChief]);
-        $this->actingAs($chief)->getJson("/mechanisms/{$again->id}/transmittal/compliance")->assertOk()
+        $again = HrMechanism::factory()->for($mechanism->agency)->create();
+        $officer2 = $this->decided($again, forCompliance: true);
+        $this->actingAs($officer2)->getJson("/mechanisms/{$again->id}/transmittal/compliance")->assertOk()
             ->assertJsonPath('defaults.addressee_name', 'Hon. Michael Dragon T. Javier')
             ->assertJsonPath('defaults.salutation', 'Mayor Javier');
     }
@@ -185,13 +212,14 @@ class TransmittalTest extends TestCase
         $this->assertSame('Reviewed MSP.docx', $documents['reviewed']['name']);
         $this->assertSame("/mechanisms/{$mechanism->id}/attachments/reviewed", $documents['reviewed']['url']);
         $this->assertSame("/mechanisms/{$mechanism->id}/attachments/checklist", $documents['checklist']['url']);
-        $this->assertNull($documents['transmittal']['name'], 'not made until the Chief decides');
+        $this->assertNull($documents['transmittal']['name'], 'not made until the Action Officer generates it');
 
         $this->actingAs($chief)->get($documents['reviewed']['url'])->assertOk()->assertDownload('Reviewed MSP.docx');
 
         // The same two documents are listed in the Chief's decision dialogs, wherever they were opened from.
         foreach (['approval', 'compliance'] as $type) {
-            $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/{$type}")->assertOk()
+            $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/{$type}?documents=1")->assertOk()
+                ->assertJsonMissingPath('defaults')
                 ->assertJsonCount(2, 'documents')
                 ->assertJsonPath('documents.0.name', 'Reviewed MSP.docx')
                 ->assertJsonPath('documents.1.url', "/mechanisms/{$mechanism->id}/attachments/checklist");
@@ -218,7 +246,7 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
-        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $chief = $this->decided($mechanism);
         $body = [
             // A run list as the editor makes it: plain, bold, italic, bold-italic.
             'p1' => [['This refers to your '], ['2027 Merit Selection Plan', 'b'], [' ('], ['MSP', 'i'], [')', 'bi'], [' and <b>markup</b> & more.']],
@@ -231,7 +259,7 @@ class TransmittalTest extends TestCase
         $this->assertStringContainsString('is already recommended for approval', $slots['p2'][0][0], 'what was not rewritten is still the standard wording');
         $this->assertSame([['Thank you.']], $slots['thanks']);
 
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields() + ['body' => $body]]))->assertRedirect();
+        $this->generate($chief, $mechanism, $this->fields() + ['body' => $body])->assertRedirect();
 
         $text = $this->letterText($mechanism);
         $this->assertStringContainsString('This refers to your 2027 Merit Selection Plan (MSP) and <b>markup</b> & more.', $text, 'markup typed in the editor is text, never markup');
@@ -251,7 +279,7 @@ class TransmittalTest extends TestCase
     {
         $this->imis();
         $mechanism = $this->forReview();
-        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $chief = $this->decided($mechanism);
         $url = "/mechanisms/{$mechanism->id}/transmittal/approval/view";
 
         $this->actingAs($chief)->postJson($url, $this->fields() + ['body' => ['date' => [['x']]]])->assertUnprocessable();
@@ -270,7 +298,7 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
-        $chief = User::factory()->role(UserRole::PsedChief)->create();
+        $chief = $this->decided($mechanism);
 
         $view = $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/approval/view", $this->fields(['signatory_id' => 50]))->assertOk();
         $slots = $view->json('slots');
@@ -286,8 +314,8 @@ class TransmittalTest extends TestCase
         $this->assertSame([['Thank you.']], $slots['thanks']);
         $this->assertSame([['Very truly yours,']], $slots['closing']);
 
-        // The same words end up in the Word file the Chief then generates.
-        $this->actingAs($chief)->post("/mechanisms/{$mechanism->id}/chief-approve", $this->decision($chief, ['transmittal' => $this->fields(['signatory_id' => 50])]))->assertRedirect();
+        // The same words end up in the Word file the Action Officer then generates.
+        $this->generate($chief, $mechanism, $this->fields(['signatory_id' => 50]))->assertRedirect();
         $text = $this->letterText($mechanism);
         foreach (['p1', 'p2', 'p3'] as $paragraph) {
             $this->assertStringContainsString(implode('', array_column($slots[$paragraph], 0)), $text);
@@ -300,20 +328,21 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
+        $officer = $this->decided($mechanism, forCompliance: true);
         $chief = User::factory()->role(UserRole::PsedChief)->create();
-        $officer = User::factory()->role(UserRole::PsedStaff)->create();
 
         // Nothing is made or sent by looking.
-        $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields())->assertOk()
+        $this->actingAs($officer)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields())->assertOk()
             ->assertJsonPath('slots.p1.1.0', '2027 Revised Merit Selection Plan')
             ->assertJsonPath('slots.p1.1.1', 'b');
-        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
+        $this->assertSame(MechanismStatus::ForCompliance, $mechanism->fresh()->status);
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
         Notification::assertNothingSent();
 
-        $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/approval/view", $this->fields(['addressee_name' => '']))->assertUnprocessable()->assertJsonValidationErrors('addressee_name');
-        $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/approval/view", $this->fields(['signatory_id' => 12]))->assertUnprocessable();
-        $this->actingAs($officer)->postJson("/mechanisms/{$mechanism->id}/transmittal/approval/view", $this->fields())->assertForbidden();
+        $this->actingAs($officer)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields(['addressee_name' => '']))->assertUnprocessable()->assertJsonValidationErrors('addressee_name');
+        $this->actingAs($officer)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields(['signatory_id' => 12]))->assertUnprocessable();
+        $this->actingAs($officer)->postJson("/mechanisms/{$mechanism->id}/transmittal/approval/view", $this->fields())->assertNotFound();
+        $this->actingAs($chief)->postJson("/mechanisms/{$mechanism->id}/transmittal/compliance/view", $this->fields())->assertForbidden();
     }
 
     public function test_a_draft_can_be_downloaded_without_sending_anything(): void
@@ -322,34 +351,66 @@ class TransmittalTest extends TestCase
         Notification::fake();
         $this->imis();
         $mechanism = $this->forReview();
+        $officer = $this->decided($mechanism);
 
-        $response = $this->actingAs(User::factory()->role(UserRole::PsedChief)->create())
-            ->post("/mechanisms/{$mechanism->id}/transmittal/approval/preview", $this->fields());
+        $response = $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmittal/approval/preview", $this->fields());
 
         $response->assertOk()->assertDownload('DRAFT_Transmittal_ForApproval_'.$mechanism->tracking_code.'.docx');
-        $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status);
         $this->assertNull($mechanism->fresh()->currentAttachments()->firstWhere('kind', 'transmittal'));
         Notification::assertNothingSent();
     }
 
-    public function test_only_who_may_take_the_step_may_open_its_letter(): void
+    public function test_only_the_action_officer_may_open_the_letter_the_chief_decided_on(): void
     {
+        Storage::fake('local');
         $this->imis();
         $mechanism = $this->forReview();
-        $officer = User::factory()->role(UserRole::PsedStaff)->create();
-
-        // Both letters are the PSED Chief's, once the mechanism is with them. The Action Officer, who only forwards, gets neither.
-        $mechanism->update(['action_officer_id' => $officer->id]);
         $chief = User::factory()->role(UserRole::PsedChief)->create();
-        $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertOk();
-        $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/compliance")->assertOk();
-        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
-        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/compliance")->assertForbidden();
-        $this->actingAs(User::factory()->role(UserRole::Director)->create())->getJson("/mechanisms/{$mechanism->id}/transmittal/compliance")->assertForbidden();
-        $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/other")->assertNotFound();
 
-        // Before the Chief has it (still being processed), nobody may open a letter.
-        $mechanism->update(['status' => MechanismStatus::Processing]);
+        // While the Chief decides, the Chief may list what was forwarded, but nobody may open a letter.
+        $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval?documents=1")->assertOk();
         $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
+
+        $officer = $this->decided($mechanism);
+        $other = User::factory()->role(UserRole::PsedStaff)->create();
+
+        // After the decision the letter is the Action Officer's: the one the Chief chose, and nobody else's.
+        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertOk();
+        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/compliance")->assertNotFound();
+        $this->actingAs($chief)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
+        $this->actingAs($other)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
+        $this->actingAs(User::factory()->role(UserRole::Director)->create())->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
+        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/other")->assertNotFound();
+
+        // The details tell the officer what they may do: generate first, transmit once the letter exists.
+        $can = fn () => $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}")->json('can');
+        $this->assertTrue($can()['generateTransmittal']);
+        $this->assertFalse($can()['transmit'], 'nothing to transmit until the letter is generated');
+        $this->generate($officer, $mechanism)->assertRedirect();
+        $this->assertTrue($can()['transmit']);
+
+        // Before the Chief decides, nobody may open a letter.
+        $mechanism->update(['status' => MechanismStatus::Processing]);
+        $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}/transmittal/approval")->assertForbidden();
+    }
+
+    public function test_the_action_officer_cannot_send_the_agency_anything_before_the_transmittal_is_generated(): void
+    {
+        Storage::fake('local');
+        Notification::fake();
+        $this->imis();
+        $mechanism = $this->forReview();
+        $officer = $this->decided($mechanism);
+        $signed = fn () => \Illuminate\Http\UploadedFile::fake()->create('signed.pdf', 10);
+
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => $signed()])
+            ->assertSessionHasErrors(['reviewed' => "Generate the transmittal first, then print it for the Regional Director's signature."]);
+        $this->assertSame(MechanismStatus::Reviewed, $mechanism->fresh()->status);
+        Notification::assertNothingSent();
+
+        $this->generate($officer, $mechanism)->assertRedirect();
+        $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/transmit", ['signed_transmittal' => $signed()])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertSame(MechanismStatus::TransmittalApproved, $mechanism->fresh()->status);
     }
 }
