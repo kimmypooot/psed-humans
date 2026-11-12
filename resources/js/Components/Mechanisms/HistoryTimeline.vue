@@ -19,6 +19,7 @@ const dot = {
     returned: 'bg-danger',
     email_failed: 'bg-danger',
     reviewed: 'bg-warning',
+    undone: 'bg-warning',
     approved: 'bg-success',
 };
 

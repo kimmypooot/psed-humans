@@ -252,8 +252,13 @@ class HrMechanismWorkflowTest extends TestCase
         $this->assertEquals($due->toDateString(), $mechanism->due_at->toDateString());
         $this->assertDatabaseHas('hr_mechanism_events', ['hr_mechanism_id' => $mechanism->id, 'action' => 'returned_to_officer', 'remarks' => 'Check the criteria.']);
 
+        // The Action Officer sees the Chief's remarks on the mechanism; the agency does not.
+        $this->assertSame('Check the criteria.', $this->actingAs($officer)->getJson("/mechanisms/{$mechanism->id}")->json('remarks'));
+        $this->get(URL::signedRoute('track.show', $mechanism))->assertInertia(fn ($page) => $page->where('mechanism.remarks', null));
+
         // The officer re-evaluates and forwards it to the Chief again.
         $this->actingAs($officer)->post("/mechanisms/{$mechanism->id}/forward", $this->documents())->assertRedirect();
+        $this->assertNull($mechanism->fresh()->remarks, 'the old remarks do not follow it to the Chief');
         $this->assertSame(MechanismStatus::ReviewedByChief, $mechanism->fresh()->status);
     }
 

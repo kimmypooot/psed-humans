@@ -21,6 +21,7 @@ import { request, requestJson, downloadFile, errorMessage } from '@/Utils/http';
  *   Approve / For compliance / Return to the officer (PSED Chief; the Chief signs the checklist with their PNPKI certificate) ->
  *   Generate the transmittal (Action Officer) -> Transmit (Action Officer: the Regional Director signed the printed transmittal; this emails the agency) ->
  *   Final approve (Regional Director or PSED) -> Record distribution (Action Officer).
+ * Undo takes back the most recent step (routing, acknowledging, forwarding, the Chief's decision) while nothing has left PSED.
  * The Chief reviews what was forwarded and decides. Nothing reaches the agency until the Action Officer transmits.
  * The Chief only signs the checklist. The Action Officer makes the transmittal letter from the letter fields
  * (addressee, subject, and the Director IV or Director III who signs), which the form starts filled in.
@@ -60,6 +61,7 @@ const steps = {
     chief: { title: 'Approve (PSED Chief)', url: 'chief-approve', button: 'Approve', variant: 'success', icon: 'checkCircle', forwarded: 'approval', signed: true, text: 'Your review found it ready for approval. Sign the HR checklist with your DICT PNPKI certificate and upload it. The status becomes Reviewed. The Action Officer then generates the For Approval transmittal, has the Regional Director sign it, and sends it to the agency.' },
     generate: { title: 'Generate the transmittal', url: 'generate-transmittal', button: 'Generate the transmittal', variant: 'primary', icon: 'arrowRight', letter: 'auto', text: 'The PSED Chief decided. Fill in the transmittal letter and generate it. Then open it under Documents, print it, and have the Regional Director (or Assistant Regional Director) sign it. You can generate it again until it is sent.' },
     transmit: { title: 'Transmit to the agency', url: 'transmit', button: 'Email the agency', variant: 'primary', icon: 'arrowRight', transmit: true, text: 'Upload the transmittal the Regional Director signed. The status becomes Transmittal (Approved) or Transmittal (For Compliance), and the agency is emailed the reviewed HR mechanism, the signed transmittal and the HR checklist.' },
+    undo: { title: 'Undo the last step', url: 'undo', button: 'Undo', variant: 'danger', icon: 'chevronLeft', remarks: true, remarksLabel: 'Why is this being undone?', text: 'This puts the mechanism back one step. Nothing is deleted: the step and your reason stay in the history. Once the agency has been emailed, a step can no longer be undone.' },
     final: { title: 'Final approval', url: 'final-approve', button: 'Final approve', variant: 'success', icon: 'shield', text: "Confirm the Head of Agency's signed copies reached the Regional Office. The mechanism becomes Approved." },
     distribute: { title: 'Record distribution', url: 'distribute', button: 'Record distribution', variant: 'primary', icon: 'check', text: 'Confirm that one approved copy went to the CSC Field Office, one to the agency, and the third is kept in the records of the Policies and Systems Evaluation Division.' },
 };
@@ -121,6 +123,7 @@ const close = () => {
     previewing.value = false;
 };
 const step = computed(() => (action.value ? steps[action.value] : null));
+const stepTitle = computed(() => (action.value === 'undo' ? props.mechanism.undo_label : step.value?.title) ?? '');
 // The letter the Chief's decision calls for: For Compliance when the Chief marked it so.
 const letterType = computed(() => (step.value?.letter === 'auto' ? (props.mechanism.status === 'For Compliance' ? 'compliance' : 'approval') : step.value?.letter));
 
@@ -292,8 +295,9 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
         <Button v-if="mechanism.can.transmit" :size="size" @click="open('transmit')">Transmit to agency</Button>
         <Button v-if="mechanism.can.finalApprove" :size="size" variant="success" @click="open('final')">Final approve</Button>
         <Button v-if="mechanism.can.distribute" :size="size" @click="open('distribute')">Record distribution</Button>
+        <Button v-if="mechanism.can.undo" :size="size" variant="ghost" @click="open('undo')"><Icon name="chevronLeft" size="sm" />{{ mechanism.undo_label }}</Button>
 
-        <Modal :open="action !== null" :title="step ? step.title : ''" :icon="step ? step.icon : null" :size="previewing ? 'xl' : 'lg'" @close="close">
+        <Modal :open="action !== null" :title="stepTitle" :icon="step ? step.icon : null" :size="previewing ? 'xl' : 'lg'" @close="close">
             <form v-if="step" class="space-y-4" @submit.prevent="send">
                 <div v-show="!previewing" class="space-y-4">
                 <p class="text-sm text-text-muted">
@@ -369,6 +373,9 @@ const docErrors = computed(() => [form.errors.reviewed, form.errors.transmittal,
                             <div class="h-9 rounded bg-surface-muted" />
                         </div>
                         <div v-else-if="!letterFailed" class="grid gap-4 sm:grid-cols-2">
+                            <Alert v-if="!signatories.length" tone="warning" class="sm:col-span-2">
+                                The Director IV and Director III could not be loaded from IMIS, so no one can be chosen under "Signed by". Check that IMIS is running and that IMIS_API_URL and IMIS_API_TOKEN are set, then close this and open it again.
+                            </Alert>
                             <FormGroup id="tr-date" label="Date of the letter" required :error="form.errors['transmittal.date']">
                                 <FieldInput id="tr-date" v-model="form.transmittal.date" type="date" required :invalid="!!form.errors['transmittal.date']" />
                             </FormGroup>

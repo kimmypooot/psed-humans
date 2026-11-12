@@ -6,6 +6,7 @@ use App\Enums\MechanismStatus;
 use App\Enums\UserRole;
 use App\Models\HrMechanism;
 use App\Models\User;
+use App\Support\MechanismUndo;
 
 /** Who may see and move an HR mechanism. Every workflow route checks this as well as its role. */
 class HrMechanismPolicy
@@ -49,6 +50,25 @@ class HrMechanismPolicy
     public function returnToOfficer(User $user, HrMechanism $mechanism): bool
     {
         return $this->review($user, $mechanism) && $mechanism->action_officer_id !== null;
+    }
+
+    /**
+     * Undo the most recent step (see MechanismUndo): whoever took it may take it back. Routing by PSED staff, the acknowledgement
+     * and the forwarding by the Action Officer, and the decision by the PSED Chief.
+     */
+    public function undo(User $user, HrMechanism $mechanism): bool
+    {
+        $step = MechanismUndo::step($mechanism);
+
+        if ($step === null) {
+            return false;
+        }
+
+        return match ($step['action']) {
+            'routed' => $user->isPsed(),
+            'acknowledged', 'forwarded' => $user->isPsed() && $mechanism->action_officer_id === $user->id,
+            default => $user->isChief(),
+        };
     }
 
     /** After the Chief decides, the Action Officer generates the transmittal letter. */

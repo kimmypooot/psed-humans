@@ -8,6 +8,7 @@ use App\Models\AuditLog;
 use App\Models\HrMechanism;
 use App\Models\HrMechanismAttachment;
 use App\Models\User;
+use App\Support\MechanismUndo;
 use App\Support\PdfSignature;
 use App\Support\Transmittal;
 use Illuminate\Http\RedirectResponse;
@@ -92,6 +93,19 @@ class MechanismWorkflowController extends Controller
         AuditLog::record('mechanism.returned_to_officer', $mechanism, after: ['remarks' => $data['remarks']]);
 
         return back()->with('status', 'Returned to the Action Officer for re-evaluation.');
+    }
+
+    /** Takes back the most recent step, with the reason. Nothing is deleted: the step and the undo stay in the history. */
+    public function undo(Request $request, HrMechanism $mechanism): RedirectResponse
+    {
+        $this->authorize('undo', $mechanism);
+
+        $data = $request->validate(['remarks' => ['required', 'string', 'min:5', 'max:2000']], ['remarks.required' => 'Say why this is being undone.', 'remarks.min' => 'Say why this is being undone.']);
+        $label = MechanismUndo::step($mechanism)['label'];
+        $this->guard(fn () => $this->process->undo($mechanism, $request->user(), $data['remarks']));
+        AuditLog::record('mechanism.undone', $mechanism, after: ['step' => $label, 'status' => $mechanism->status->value, 'reason' => $data['remarks']]);
+
+        return back()->with('status', $label.': it is now '.$mechanism->status->value.'.');
     }
 
     /** The Action Officer makes the transmittal letter after the Chief's decision, so it can be printed for the Regional Director's signature. */

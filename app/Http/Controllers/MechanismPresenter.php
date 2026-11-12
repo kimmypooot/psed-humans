@@ -6,6 +6,7 @@ use App\Models\HrMechanism;
 use App\Models\HrMechanismAttachment;
 use App\Models\User;
 use App\Support\MechanismTimeline;
+use App\Support\MechanismUndo;
 use Illuminate\Support\Facades\Gate;
 
 /** Turns a mechanism into the plain array the pages render, with what the viewer may do with it. */
@@ -52,7 +53,9 @@ class MechanismPresenter
             'is_mine' => $m->action_officer_id !== null && $m->action_officer_id === $user->id
                 || $m->officers->contains(fn ($o) => $o->user_id === $user->id),
             'turnaround' => MechanismTimeline::turnaround($m),
+            'undo_label' => $gate->allows('undo', $m) ? MechanismUndo::step($m)['label'] : null,
             'can' => [
+                'undo' => $gate->allows('undo', $m),
                 'route' => $gate->allows('route', $m),
                 'acknowledge' => $gate->allows('acknowledge', $m),
                 'work' => $gate->allows('work', $m),

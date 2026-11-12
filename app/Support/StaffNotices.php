@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\MechanismStatus;
 use App\Enums\UserRole;
 use App\Models\HrMechanism;
 use App\Models\User;
@@ -46,6 +47,22 @@ class StaffNotices
     public static function returnedToOfficer(HrMechanism $m, User $by, string $remarks): void
     {
         self::send(self::users([$m->action_officer_id], except: $by), $m, 'returned_to_officer', 'Returned for re-evaluation', self::what($m).' was returned by '.$by->name.': '.str($remarks)->limit(120));
+    }
+
+    /** A step was taken back: the person it was waiting on, or had been waiting on, is told so their bell is not stale. */
+    public static function undone(HrMechanism $m, User $by, string $label, string $reason): void
+    {
+        $people = match ($m->status) {
+            MechanismStatus::ReviewedByChief, MechanismStatus::Processing => self::users([$m->action_officer_id], except: $by),
+            default => collect(),
+        };
+
+        // Withdrawn from the Chief: the Chief hears it is no longer waiting for them.
+        if ($m->status === MechanismStatus::Processing && $by->id === $m->action_officer_id) {
+            $people = User::where('role', UserRole::PsedChief)->get();
+        }
+
+        self::send($people, $m, 'undone', $label, self::what($m).': '.$label.' by '.$by->name.'. '.str($reason)->limit(120));
     }
 
     /**

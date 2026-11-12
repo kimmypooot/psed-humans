@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * One of the three documents PSED sends back: the reviewed HR mechanism and the HR checklist (attached by the
  * Action Officer) and the transmittal (generated; see App\Support\Transmittal).
  */
-#[Fillable(['hr_mechanism_id', 'kind', 'path', 'name', 'uploaded_by', 'signed_by', 'signer_issuer', 'signed_checked_at'])]
+#[Fillable(['hr_mechanism_id', 'kind', 'path', 'name', 'uploaded_by', 'signed_by', 'signer_issuer', 'signed_checked_at', 'reverted_at'])]
 class HrMechanismAttachment extends Model
 {
     public const KINDS = [

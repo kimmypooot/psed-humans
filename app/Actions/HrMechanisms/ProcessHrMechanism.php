@@ -10,6 +10,7 @@ use App\Models\HrMechanismAttachment;
 use App\Models\User;
 use App\Notifications\MechanismForwardedToChief;
 use App\Notifications\MechanismStatusChanged;
+use App\Support\MechanismUndo;
 use App\Support\StaffNotices;
 use App\Support\Transmittal;
 use App\Support\Turnaround;
@@ -115,7 +116,7 @@ class ProcessHrMechanism
 
         DB::transaction(function () use ($mechanism, $by, $note) {
             $from = $mechanism->status;
-            $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'date_evaluated' => now()]);
+            $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'date_evaluated' => now(), 'remarks' => null]);
             $mechanism->recordEvent('forwarded', $by, $from, MechanismStatus::ReviewedByChief, $note);
         });
 
@@ -149,7 +150,7 @@ class ProcessHrMechanism
     {
         DB::transaction(function () use ($mechanism, $by, $remarks) {
             $from = $mechanism->status;
-            $mechanism->update(['status' => MechanismStatus::Processing, 'date_evaluated' => null]);
+            $mechanism->update(['status' => MechanismStatus::Processing, 'date_evaluated' => null, 'remarks' => $remarks]);
             $mechanism->recordEvent('returned_to_officer', $by, $from, MechanismStatus::Processing, $remarks);
         });
 
@@ -321,6 +322,62 @@ class ProcessHrMechanism
         });
 
         return $mechanism;
+    }
+
+    /**
+     * Takes back the most recent step (see MechanismUndo). The step stays in the history and an "undone" entry with the reason
+     * is added after it. The checklist the Chief signed is kept but is no longer the current one when their decision is undone.
+     *
+     * @throws RuntimeException when there is nothing to undo
+     */
+    public function undo(HrMechanism $mechanism, User $by, string $reason): HrMechanism
+    {
+        $step = MechanismUndo::step($mechanism);
+
+        if ($step === null) {
+            throw new RuntimeException('There is nothing to undo.');
+        }
+
+        $from = $mechanism->status;
+
+        DB::transaction(function () use ($mechanism, $by, $reason, $step, $from) {
+            match ($step['action']) {
+                'routed' => $this->undoRouting($mechanism),
+                'acknowledged' => $mechanism->update(['status' => MechanismStatus::Routed, 'acknowledged_at' => null]),
+                'forwarded' => $mechanism->update(['status' => MechanismStatus::Processing, 'date_evaluated' => null]),
+                default => $this->undoDecision($mechanism),
+            };
+
+            $mechanism->recordEvent('undone', $by, $from, $mechanism->status, $step['label'].'. '.$reason);
+        });
+
+        StaffNotices::undone($mechanism, $by, $step['label'], $reason);
+
+        return $mechanism;
+    }
+
+    /** Back to Received, as if it was not routed: no officer and no clock. */
+    private function undoRouting(HrMechanism $mechanism): void
+    {
+        $mechanism->update([
+            'status' => MechanismStatus::Received,
+            'action_officer_id' => null,
+            'processor' => null,
+            'routed_at' => null,
+            'acknowledged_at' => null,
+            'due_at' => null,
+            'date_processed' => null,
+        ]);
+        $mechanism->officers()->sync([]);
+    }
+
+    /** Back to waiting for the Chief: the checklist they signed is set aside and the officer's checklist is the current one again. */
+    private function undoDecision(HrMechanism $mechanism): void
+    {
+        $signed = $mechanism->attachments()->where('kind', 'checklist')->whereNotNull('signed_by')->whereNull('reverted_at')->latest('id')->first();
+        $signed?->update(['reverted_at' => now()]);
+
+        $mechanism->update(['status' => MechanismStatus::ReviewedByChief, 'date_reviewed' => null, 'remarks' => null]);
     }
 
     /** @throws RuntimeException */

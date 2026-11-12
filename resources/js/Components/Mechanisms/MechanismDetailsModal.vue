@@ -128,7 +128,8 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
                 <StatusBadge :status="m.status" :tone="m.tone" class="px-3 py-1 text-sm" />
             </div>
 
-            <Alert v-if="m.status === 'Transmittal (For Compliance)' && m.remarks" tone="danger" title="For compliance">{{ m.remarks }}</Alert>
+            <Alert v-if="m.status === 'Processing/Evaluating' && m.remarks" tone="warning" title="Returned by the PSED Chief">{{ m.remarks }}</Alert>
+            <Alert v-else-if="m.status === 'Transmittal (For Compliance)' && m.remarks" tone="danger" title="For compliance">{{ m.remarks }}</Alert>
             <Alert v-else-if="m.status === 'Reviewed' || m.status === 'For Compliance'" tone="warning" title="Print the transmittal">
                 The Chief decided ({{ m.status === 'Reviewed' ? 'approved' : 'for compliance' }}). The reviewed HR mechanism, the HR checklist and the transmittal are below. Print the transmittal, have the Regional Director sign it, then upload the signed copy to email the agency.
             </Alert>
@@ -182,7 +183,7 @@ const showDocs = computed(() => !!m.value && (!m.value.is_legacy || m.value.atta
                         </template>
                         <template v-if="m.location"><dt class="text-text-muted">Location</dt><dd class="text-text">{{ m.location }}</dd></template>
                         <template v-if="m.receipt_details"><dt class="text-text-muted">Receipt</dt><dd class="text-text">{{ m.receipt_details }}</dd></template>
-                        <template v-if="m.remarks && m.status !== 'Transmittal (For Compliance)'"><dt class="text-text-muted">Remarks</dt><dd class="whitespace-pre-line text-text">{{ m.remarks }}</dd></template>
+                        <template v-if="m.remarks && m.status !== 'Transmittal (For Compliance)' && m.status !== 'Processing/Evaluating'"><dt class="text-text-muted">Remarks</dt><dd class="whitespace-pre-line text-text">{{ m.remarks }}</dd></template>
                         <template v-if="m.document_name"><dt class="text-text-muted">File</dt><dd class="min-w-0 break-words text-text">{{ m.document_name }}</dd></template>
                     </dl>
                     <p v-if="m.is_legacy" class="mt-3 text-xs text-text-muted">Brought over from the old monitoring workbook; the agency's own file was not imported.</p>

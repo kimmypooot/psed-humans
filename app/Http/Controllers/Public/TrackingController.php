@@ -61,7 +61,8 @@ class TrackingController extends Controller
                 'type_label' => $mechanism->mechanism_type->label(),
                 'status' => $mechanism->status->value,
                 'tone' => $mechanism->status->tone(),
-                'remarks' => $mechanism->remarks,
+                // Only what the agency must correct; what the Chief told the Action Officer stays inside PSED.
+                'remarks' => $mechanism->status === MechanismStatus::TransmittalCompliance ? $mechanism->remarks : null,
                 'date_submitted' => $mechanism->date_submitted?->toIso8601String(),
                 'updated_at' => $mechanism->updated_at?->toIso8601String(),
                 'steps' => MechanismTimeline::steps($mechanism),

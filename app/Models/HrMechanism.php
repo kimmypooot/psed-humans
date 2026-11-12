@@ -105,7 +105,7 @@ class HrMechanism extends Model
      */
     public function currentAttachments(): Collection
     {
-        return $this->attachments()->get()->groupBy('kind')->map->last()->values()->pipe(fn ($items) => new Collection($items->all()));
+        return $this->attachments()->whereNull('reverted_at')->get()->groupBy('kind')->map->last()->values()->pipe(fn ($items) => new Collection($items->all()));
     }
 
     /**
